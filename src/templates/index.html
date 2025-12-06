@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAOS - Tuanhe Aqueduct Autonomous System</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f0f2f5; margin: 0; padding: 20px; }
+        .dashboard { display: grid; grid-template-columns: 2fr 1fr; gap: 20px; }
+        .card { background: white; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); margin-bottom: 20px;}
+        h2 { margin-top: 0; color: #333; }
+        .status-panel { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+        .metric { background: #e9ecef; padding: 10px; border-radius: 4px; }
+        .metric label { display: block; font-size: 0.8em; color: #666; }
+        .metric value { font-size: 1.2em; font-weight: bold; color: #2c3e50; }
+
+        .alert-box { background: #fff3cd; color: #856404; padding: 10px; border-radius: 4px; margin-top: 10px; display: none;}
+        .alert-critical { background: #f8d7da; color: #721c24; }
+
+        .controls button {
+            padding: 10px 15px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;
+        }
+        .btn-normal { background: #28a745; color: white; }
+        .btn-danger { background: #dc3545; color: white; }
+        .btn-warning { background: #ffc107; color: black; }
+        .btn-info { background: #17a2b8; color: white; }
+
+        canvas#aqueductViz { width: 100%; height: 300px; background: #e0f7fa; border-radius: 4px; }
+    </style>
+</head>
+<body>
+    <h1>Tuanhe Aqueduct Autonomous Operation System (TAOS)</h1>
+
+    <div class="dashboard">
+        <div class="main-view">
+            <div class="card">
+                <h2>Real-time Visualization</h2>
+                <canvas id="aqueductViz"></canvas>
+            </div>
+
+            <div class="card">
+                <h2>System Status</h2>
+                <div id="alertBox" class="alert-box"></div>
+                <div class="status-panel">
+                    <div class="metric"><label>Controller Status</label><value id="val-status">NORMAL</value></div>
+                    <div class="metric"><label>Active Scenarios</label><value id="val-scenarios">None</value></div>
+                    <div class="metric"><label>Water Level (m)</label><value id="val-h">4.00</value></div>
+                    <div class="metric"><label>Flow Velocity (m/s)</label><value id="val-v">2.00</value></div>
+                    <div class="metric"><label>Froude Number</label><value id="val-fr">0.32</value></div>
+                    <div class="metric"><label>Joint Gap (mm)</label><value id="val-gap">20.0</value></div>
+                    <div class="metric"><label>Concrete Temp (Sun/Shade)</label><value id="val-temp">20 / 20</value></div>
+                    <div class="metric"><label>Vibration (mm)</label><value id="val-vib">0.0</value></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="sidebar">
+            <div class="card controls">
+                <h2>Scenario Injector</h2>
+                <button class="btn-normal" onclick="setScenario('NORMAL')">Reset / Normal</button>
+                <button class="btn-danger" onclick="setScenario('S1.1')">S1.1 Hydraulic Jump</button>
+                <button class="btn-warning" onclick="setScenario('S3.1')">S3.1 Thermal Bending</button>
+                <button class="btn-info" onclick="setScenario('S4.1')">S4.1 Cold / Joint Tear</button>
+                <hr>
+                <button class="btn-danger" onclick="setScenario('S3.3')">S3.3 Bearing Lock</button>
+                <button class="btn-danger" onclick="setScenario('S5.1')">S5.1 Earthquake</button>
+            </div>
+
+            <div class="card">
+                <h2>Live Charts</h2>
+                <canvas id="tempChart"></canvas>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const ctxViz = document.getElementById('aqueductViz').getContext('2d');
+        const ctxChart = document.getElementById('tempChart').getContext('2d');
+
+        // Setup Chart
+        const tempChart = new Chart(ctxChart, {
+            type: 'line',
+            data: {
+                labels: [],
+                datasets: [{
+                    label: 'Sun Side Temp',
+                    borderColor: 'red',
+                    data: []
+                }, {
+                    label: 'Shade Side Temp',
+                    borderColor: 'blue',
+                    data: []
+                }]
+            },
+            options: { animation: false }
+        });
+
+        function setScenario(id) {
+            fetch('/api/scenario', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({scenario_id: id})
+            });
+        }
+
+        function drawAqueduct(state) {
+            const w = ctxViz.canvas.width;
+            const h = ctxViz.canvas.height;
+            ctxViz.clearRect(0, 0, w, h);
+
+            // Draw Concrete U-Shape
+            ctxViz.fillStyle = '#95a5a6';
+            const baseH = h - 50;
+            const troughW = w * 0.8;
+            const startX = w * 0.1;
+
+            // Deformed shape based on bending?
+            // Simple visual: Rect
+            ctxViz.fillRect(startX, baseH - 100, troughW, 100);
+
+            // Draw Water
+            ctxViz.fillStyle = '#3498db';
+            const waterHeight = (state.h / 8.0) * 80; // Scale
+            ctxViz.fillRect(startX + 10, baseH - 10 - waterHeight, troughW - 20, waterHeight);
+
+            // Draw Flow Arrow
+            ctxViz.strokeStyle = 'white';
+            ctxViz.lineWidth = 2;
+            ctxViz.beginPath();
+            ctxViz.moveTo(startX + 50, baseH - 10 - waterHeight/2);
+            ctxViz.lineTo(startX + 150, baseH - 10 - waterHeight/2);
+            ctxViz.stroke();
+
+            // Draw Sun
+            if (state.solar_rad > 0.5) {
+                ctxViz.fillStyle = 'orange';
+                ctxViz.beginPath();
+                ctxViz.arc(50, 50, 30, 0, Math.PI*2);
+                ctxViz.fill();
+            }
+
+            // Draw Vibration
+            if (state.vib_amp > 5.0) {
+                 ctxViz.fillStyle = 'red';
+                 ctxViz.fillText("VIBRATION!", w/2 - 30, 30);
+            }
+        }
+
+        async function update() {
+            const res = await fetch('/api/state');
+            const state = await res.json();
+
+            // Update Text
+            document.getElementById('val-h').innerText = state.h.toFixed(2);
+            document.getElementById('val-v').innerText = state.v.toFixed(2);
+            document.getElementById('val-fr').innerText = state.fr.toFixed(2);
+            document.getElementById('val-gap').innerText = state.joint_gap.toFixed(1);
+            document.getElementById('val-temp').innerText = `${state.T_sun.toFixed(1)} / ${state.T_shade.toFixed(1)}`;
+            document.getElementById('val-vib').innerText = state.vib_amp.toFixed(1);
+            document.getElementById('val-status').innerText = state.status || "NORMAL";
+            document.getElementById('val-scenarios').innerText = state.active_scenarios.join(', ') || "None";
+
+            // Alerts
+            const alertBox = document.getElementById('alertBox');
+            if (state.risks && state.risks.length > 0) {
+                alertBox.style.display = 'block';
+                alertBox.innerText = state.risks.join('\n');
+                if (state.risks.some(r => r.includes("CRITICAL"))) {
+                    alertBox.className = 'alert-box alert-critical';
+                } else {
+                    alertBox.className = 'alert-box';
+                }
+            } else {
+                alertBox.style.display = 'none';
+            }
+
+            // Update Viz
+            drawAqueduct(state);
+
+            // Update Chart
+            if (tempChart.data.labels.length > 50) {
+                tempChart.data.labels.shift();
+                tempChart.data.datasets[0].data.shift();
+                tempChart.data.datasets[1].data.shift();
+            }
+            tempChart.data.labels.push(state.time.toFixed(1));
+            tempChart.data.datasets[0].data.push(state.T_sun);
+            tempChart.data.datasets[1].data.push(state.T_shade);
+            tempChart.update();
+        }
+
+        setInterval(update, 500);
+    </script>
+</body>
+</html>
