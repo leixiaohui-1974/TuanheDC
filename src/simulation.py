@@ -2,45 +2,78 @@ import numpy as np
 import math
 
 class AqueductSimulation:
+    """
+    湍河渡槽高保真物理仿真模型
+
+    基于南水北调中线工程湍河渡槽真实参数:
+    - 渡槽全长: 1030m (共18跨)
+    - 单跨长度: 40m (标准跨)
+    - 槽身宽度: 9.0m (内净宽)
+    - 设计水深: 6.5m
+    - 设计流量: 350 m³/s (最大420 m³/s)
+    - 结构形式: 预应力混凝土简支梁
+    """
+
     def __init__(self):
-        # --- System Constants ---
-        self.L_span = 40.0  # Span length (m)
-        self.Width = 10.0   # Width (m)
-        self.H_max = 8.0    # Max depth (m)
-        self.mass_concrete = 1600.0 * 1000 # kg (approx per span)
+        # === 真实湍河渡槽几何参数 ===
+        self.L_span = 40.0      # 单跨长度 (m) - 湍河渡槽标准跨40m
+        self.Width = 9.0        # 槽身内净宽 (m) - 真实值9.0m
+        self.H_max = 8.0        # 槽身设计高度 (m)
+        self.H_design = 6.5     # 设计水深 (m)
+        self.num_spans = 18     # 总跨数
+        self.total_length = 1030.0  # 渡槽全长 (m)
+
+        # === 结构参数 ===
+        self.mass_per_span = 2400.0 * 1000  # 单跨质量 (kg) - 约2400吨
         self.g = 9.81
 
-        # Thermal props
-        self.alpha_c = 1e-5 # Thermal expansion coeff concrete
-        # Reduced coefficients to simulate thermal inertia (time constants in minutes/hours)
-        self.k_air = 0.0005   # Heat transfer coeff air
-        self.k_water = 0.002  # Heat transfer coeff water
-        self.k_sun = 0.001    # Solar heating gain factor
+        # 材料参数 - C50混凝土
+        self.E_concrete = 34.5e9      # 弹性模量 (Pa)
+        self.alpha_c = 1.0e-5         # 热膨胀系数 (/°C)
+        self.rho_concrete = 2500      # 密度 (kg/m³)
 
-        # --- State Variables ---
-        # Water
-        self.h = 4.0        # Water level (m)
-        self.v = 2.0        # Flow velocity (m/s)
-        self.T_water = 15.0 # Water temp (C)
-        self.Q_in = 80.0    # Inflow (m3/s)
-        self.Q_out = 80.0   # Outflow (m3/s) - controlled by gates
+        # 热传递系数 (经验值)
+        self.k_air = 0.0005           # 空气-混凝土换热
+        self.k_water = 0.002          # 水-混凝土换热
+        self.k_sun = 0.001            # 太阳辐射增益
 
-        # Concrete
-        self.T_sun = 20.0   # Sun-side temp (C)
-        self.T_shade = 20.0 # Shade-side temp (C)
-        self.joint_gap = 20.0 # mm (Design gap)
+        # 支座参数 - 球型支座
+        self.bearing_capacity = 8000  # 支座承载力 (kN)
+        self.bearing_friction = 0.03  # 支座摩擦系数
 
-        # Vibration/Structure
-        self.vib_amp = 0.0  # Vibration amplitude (mm)
-        self.bearing_stress = 10.0 # MPa
+        # 伸缩缝参数
+        self.joint_gap_design = 20.0  # 设计缝宽 (mm)
+        self.joint_gap_min = 5.0      # 最小允许缝宽 (mm)
+        self.joint_gap_max = 35.0     # 最大允许缝宽 (mm)
 
-        # --- Environment Inputs (Disturbances) ---
-        self.T_ambient = 25.0
-        self.solar_rad = 0.0 # 0 to 1 scale
-        self.wind_speed = 0.0 # m/s
-        self.ground_accel = 0.0 # m/s2 (Earthquake)
+        # === 状态变量 ===
+        # 水力状态
+        self.h = 4.0            # 当前水深 (m)
+        self.v = 2.0            # 流速 (m/s)
+        self.T_water = 15.0     # 水温 (°C)
+        self.Q_in = 80.0        # 进口流量 (m³/s)
+        self.Q_out = 80.0       # 出口流量 (m³/s)
+        self.Q_design = 350.0   # 设计流量 (m³/s)
+        self.Q_max = 420.0      # 最大过流能力 (m³/s)
 
-        # Scenario Flags
+        # 温度状态
+        self.T_sun = 20.0       # 向阳面温度 (°C)
+        self.T_shade = 20.0     # 背阴面温度 (°C)
+        self.T_core = 18.0      # 混凝土核心温度 (°C)
+
+        # 结构状态
+        self.joint_gap = 20.0   # 当前缝宽 (mm)
+        self.vib_amp = 0.0      # 振动幅值 (mm)
+        self.bearing_stress = 31.0  # 支座应力 (MPa) - 自重产生的初始应力
+        self.deflection = 0.0   # 挠度 (mm)
+
+        # === 环境输入 ===
+        self.T_ambient = 25.0   # 环境温度 (°C)
+        self.solar_rad = 0.0    # 太阳辐射强度 (0-1)
+        self.wind_speed = 0.0   # 风速 (m/s)
+        self.ground_accel = 0.0 # 地震加速度 (g)
+
+        # 场景标志
         self.ice_plug = False
         self.bearing_locked = False
 
@@ -120,7 +153,7 @@ class AqueductSimulation:
         breathing = (self.h - 4.0) * 0.5 # mm
         self.joint_gap += breathing
 
-        weight_stress = (self.mass_concrete + self.h * self.Width * self.L_span * 1000) * 9.81 / 1e6
+        weight_stress = (self.mass_per_span + self.h * self.Width * self.L_span * 1000) * 9.81 / 1e6
 
         thermal_stress = 0.0
         if self.bearing_locked:

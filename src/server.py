@@ -4,7 +4,9 @@ import time
 from collections import deque
 from datetime import datetime
 from simulation import AqueductSimulation
-from control import AutonomousController, ControlMode
+from control import AutonomousController, ControlMode, PerceptionSystem
+from mpc_controller import HybridController, AdaptiveMPC
+from scenario_generator import ScenarioGenerator
 
 app = Flask(__name__)
 
@@ -13,41 +15,86 @@ HISTORY_MAX_SIZE = 1000  # Maximum number of state history records
 SIMULATION_DT = 0.5      # Simulation step size (seconds)
 SIMULATION_SLEEP = 0.1   # Sleep between simulation steps
 
-# Global instances
+# Global instances - 分层智能体架构
 sim = AqueductSimulation()
 controller = AutonomousController()
+perception = PerceptionSystem()      # 感知层
+mpc_controller = AdaptiveMPC()       # MPC控制层
+hybrid_controller = HybridController()  # 混合控制器
+scenario_gen = ScenarioGenerator()   # 场景生成器
+
 simulation_running = True
 simulation_paused = False
 last_control_actions = {}
+last_perception_result = {}     # 场景识别结果
+last_mpc_state = {}             # MPC控制器状态
 sim_lock = threading.Lock()
 state_history = deque(maxlen=HISTORY_MAX_SIZE)
 start_time = datetime.now()
 
 
 def simulation_loop():
-    """Background simulation loop."""
-    global last_control_actions
+    """
+    Background simulation loop with full agent hierarchy.
+    分层智能体架构：感知层 -> 决策层 -> 执行层
+    """
+    global last_control_actions, last_perception_result, last_mpc_state
     dt = SIMULATION_DT
 
     while simulation_running:
         if not simulation_paused:
             with sim_lock:
                 state = sim.get_state()
+                state['time'] = sim.time
 
-                # Determine control actions
+                # === 感知层：场景识别 ===
+                detected_scenarios, risks = perception.analyze(state)
+                risk_level = perception.get_risk_level(risks)
+
+                last_perception_result = {
+                    'detected_scenarios': detected_scenarios,
+                    'risks': risks,
+                    'risk_level': risk_level.value if hasattr(risk_level, 'value') else str(risk_level),
+                    'multi_physics_active': 'MULTI_PHYSICS' in detected_scenarios
+                }
+
+                # === 决策层：MPC增益自适应 ===
+                mpc_controller._update_gains(detected_scenarios)
+                mpc_result = mpc_controller.compute(state, detected_scenarios)
+
+                last_mpc_state = {
+                    'method': mpc_result.get('method', 'UNKNOWN'),
+                    'gains': mpc_result.get('gains', {}),
+                    'target_h': mpc_controller.config.h_target,
+                    'solve_count': mpc_controller.solve_count,
+                    'fallback_count': mpc_controller.fallback_count,
+                    'fallback_rate': mpc_controller.fallback_count / max(1, mpc_controller.solve_count)
+                }
+
+                # === 执行层：控制决策 ===
                 actions = controller.decide(state)
                 last_control_actions = actions
+
+                # 合并MPC建议（如果控制器处于AUTO模式）
+                if actions.get('status') == 'NORMAL':
+                    actions['Q_in'] = mpc_result.get('Q_in', actions.get('Q_in', 80.0))
+                    actions['Q_out'] = mpc_result.get('Q_out', actions.get('Q_out', 80.0))
 
                 # Evolve simulation
                 sim.step(dt, actions)
 
-                # Record history
+                # Record comprehensive history
                 history_entry = {
                     'timestamp': datetime.now().isoformat(),
                     'sim_time': state['time'],
                     **state,
                     'status': actions.get('status', 'UNKNOWN'),
-                    'active_scenarios': actions.get('active_scenarios', [])
+                    'active_scenarios': detected_scenarios,
+                    'risk_level': last_perception_result['risk_level'],
+                    'mpc_method': last_mpc_state['method'],
+                    'mpc_target_h': last_mpc_state['target_h'],
+                    'Q_in_cmd': actions.get('Q_in', 80.0),
+                    'Q_out_cmd': actions.get('Q_out', 80.0)
                 }
                 state_history.append(history_entry)
 
@@ -251,6 +298,179 @@ def get_stats():
         stats['scenario_occurrences'] = scenario_counts
 
         return jsonify(stats)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/perception')
+def get_perception():
+    """获取感知层状态 - 场景识别结果和风险评估"""
+    try:
+        with sim_lock:
+            result = {
+                **last_perception_result,
+                'thresholds': {
+                    'froude_critical': perception.FROUDE_CRITICAL,
+                    'froude_warning': perception.FROUDE_WARNING,
+                    'thermal_delta_critical': perception.THERMAL_DELTA_CRITICAL,
+                    'vibration_critical': perception.VIBRATION_CRITICAL,
+                    'joint_gap_max': perception.JOINT_GAP_MAX_CRITICAL,
+                    'joint_gap_min': perception.JOINT_GAP_MIN_CRITICAL
+                },
+                'supported_scenarios': [
+                    'S1.1', 'S1.2', 'S2.1', 'S3.1', 'S3.2', 'S3.3',
+                    'S4.1', 'S4.2', 'S5.1', 'S5.2', 'S6.1', 'S6.2',
+                    'MULTI_PHYSICS'
+                ]
+            }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mpc')
+def get_mpc_state():
+    """获取MPC控制器状态 - 增益调度和优化结果"""
+    try:
+        with sim_lock:
+            # 获取当前MPC配置
+            result = {
+                **last_mpc_state,
+                'config': {
+                    'prediction_horizon': mpc_controller.config.prediction_horizon,
+                    'control_horizon': mpc_controller.config.control_horizon,
+                    'dt': mpc_controller.config.dt,
+                    'Q_min': mpc_controller.config.Q_min,
+                    'Q_max': mpc_controller.config.Q_max,
+                    'dQ_max': mpc_controller.config.dQ_max
+                },
+                'current_weights': {
+                    'w_h': mpc_controller.config.w_h,
+                    'w_fr': mpc_controller.config.w_fr,
+                    'w_T_delta': mpc_controller.config.w_T_delta,
+                    'h_target': mpc_controller.config.h_target
+                },
+                'scenario_gain_table': {
+                    k: {
+                        'w_h': v['w_h'],
+                        'w_fr': v['w_fr'],
+                        'w_T': v['w_T'],
+                        'target_h': v.get('target_h', 4.0)
+                    }
+                    for k, v in mpc_controller.scenario_gains.items()
+                },
+                'last_control': list(mpc_controller.last_u)
+            }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenarios')
+def get_scenarios():
+    """获取所有可用场景及其配置"""
+    try:
+        scenarios_info = {}
+        for scenario_id, profile in scenario_gen.scenarios.items():
+            scenarios_info[scenario_id] = {
+                'name': profile.name,
+                'description': profile.description,
+                'severity': profile.severity.name,
+                'duration_range': profile.duration_range,
+                'parameters': profile.parameters
+            }
+
+        result = {
+            'available_scenarios': scenarios_info,
+            'active_scenarios': scenario_gen.active_scenarios,
+            'environment_profile': scenario_gen.environment.profile_type,
+            'transition_matrix': scenario_gen.transition_matrix
+        }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/agent_hierarchy')
+def get_agent_hierarchy():
+    """获取分层智能体架构状态"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+            is_safe = sim.is_safe_state()
+
+            result = {
+                'architecture': {
+                    'perception_layer': {
+                        'name': 'PerceptionSystem',
+                        'function': '场景识别与风险评估',
+                        'detected_scenarios': last_perception_result.get('detected_scenarios', []),
+                        'risk_level': last_perception_result.get('risk_level', 'INFO')
+                    },
+                    'decision_layer': {
+                        'name': 'AdaptiveMPC + HybridController',
+                        'function': '自适应MPC + 场景优先级控制',
+                        'mpc_method': last_mpc_state.get('method', 'UNKNOWN'),
+                        'current_gains': last_mpc_state.get('gains', {}),
+                        'target_h': last_mpc_state.get('target_h', 4.0)
+                    },
+                    'execution_layer': {
+                        'name': 'AutonomousController',
+                        'function': '执行控制决策',
+                        'mode': str(controller.mode),
+                        'status': last_control_actions.get('status', 'UNKNOWN'),
+                        'Q_in': last_control_actions.get('Q_in', 80.0),
+                        'Q_out': last_control_actions.get('Q_out', 80.0)
+                    }
+                },
+                'system_state': {
+                    'is_safe': is_safe,
+                    'water_level': state['h'],
+                    'froude_number': state['fr'],
+                    'thermal_delta': state['T_sun'] - state['T_shade'],
+                    'vibration': state['vib_amp']
+                },
+                'adaptation_info': {
+                    'scenario_to_gains_mapping': True,
+                    'dynamic_target_update': True,
+                    'emergency_override': True,
+                    'fallback_rate': last_mpc_state.get('fallback_rate', 0.0)
+                }
+            }
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scenario', methods=['POST'])
+def set_scenario():
+    """Inject a scenario into the simulation."""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        scenario_id = data.get('scenario_id')
+        if not scenario_id:
+            return jsonify({'error': 'scenario_id is required'}), 400
+
+        # 扩展支持的场景列表
+        valid_scenarios = list(scenario_gen.scenarios.keys())
+        if scenario_id not in valid_scenarios:
+            return jsonify({
+                'error': f'Invalid scenario_id. Valid options: {valid_scenarios}'
+            }), 400
+
+        with sim_lock:
+            scenario_gen.inject_scenario(scenario_id, sim)
+            if scenario_id == 'S5.1':
+                sim.ground_accel = 0.5
+
+        return jsonify({
+            'status': 'ok',
+            'scenario': scenario_id,
+            'description': scenario_gen.scenarios[scenario_id].description
+        })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
