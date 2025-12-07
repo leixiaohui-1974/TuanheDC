@@ -1,0 +1,11 @@
+# Ignore database files (generated at runtime)
+*.db
+*.db-journal
+
+# Ignore export files
+export_*.csv
+export_*.json
+export_*.csv.gz
+
+# Keep this directory
+!.gitignore
