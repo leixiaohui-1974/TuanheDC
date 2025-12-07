@@ -1,117 +1,160 @@
-# Tuanhe Aqueduct Autonomous Operation System (TAOS) V2.1
+# Tuanhe Aqueduct Autonomous Operation System (TAOS) V3.0
 
 ## Overview
-This project implements a comprehensive Autonomous Operation & Health Management System for the Tuanhe Aqueduct (South-to-North Water Diversion Project). It addresses the "Wind-Water-Thermal-Structure" multi-physics coupling risks through intelligent perception, autonomous control, and real-time monitoring.
+This project implements a comprehensive **Autonomous Operation & Health Management System** for the Tuanhe Aqueduct (South-to-North Water Diversion Project). The system addresses "Wind-Water-Thermal-Structure" multi-physics coupling risks through intelligent perception, adaptive control, and comprehensive simulation.
 
 ## Key Features
 
 ### Core Capabilities
-- **High-Fidelity Simulation**: Models fluid dynamics (surges, sloshing), aerodynamics (VIV), thermal effects (sunlight, water cooling), and structural behavior (joints, bearings).
-- **Scenario Atlas**: Covers all critical scenarios including:
-  - S1.1: Hydraulic Jump / Flow Instability
-  - S3.1: Thermal Bending (Sun/Shade differential)
-  - S3.3: Bearing Lock
-  - S4.1: Joint Tearing (Cold expansion)
-  - S5.1: Seismic Activity
-- **Autonomous Control**: PID-based controller with scenario-specific overrides for thermal cooling, Froude number control, and emergency response.
-- **Web Interface**: Real-time visualization of the aqueduct state, sensor data, and control actions.
+- **High-Fidelity Multi-Physics Simulation**: Models fluid dynamics, thermal effects, structural behavior, and environmental conditions
+- **Comprehensive Scenario Coverage**: 14+ scenarios including hydraulic jumps, thermal bending, bearing lock, joint tearing, and seismic events
+- **Adaptive MPC Control**: Model Predictive Control with scenario-based gain scheduling and PID fallback
+- **Full Hardware-in-the-Loop Testing**: Sensor and actuator models with fault injection capability
+- **Real-time Web Dashboard**: Live visualization and scenario injection interface
 
-### Enhanced Features (V2.1)
-- **Multi-Mode Control**: AUTO, MANUAL, and EMERGENCY operation modes
-- **Comprehensive Risk Detection**: Configurable thresholds for all risk types
-- **State History Recording**: Track up to 1000 historical states for analysis
-- **Health Monitoring API**: Real-time system health and statistics endpoints
-- **Full Scenario Coverage**: Autonomous handling of all 6 scenario types
+### V3.0 Enhanced Features
+- **Sensor Models**: Noise, delay, drift, redundancy, Kalman filtering
+- **Actuator Models**: Response dynamics, rate limits, saturation, fault simulation
+- **Adaptive MPC**: Prediction horizon optimization with scenario-specific gains
+- **Scenario Generator**: Multi-physics coupling, time-varying environments, probabilistic sequences
+- **Closed-Loop Simulation**: Complete plant model integration for HIL testing
 
-## Architecture
+## System Architecture
 
 ```
 src/
-├── simulation.py      # Multi-physics simulation engine
-├── control.py         # Perception system and autonomous controller
-├── server.py          # Flask REST API backend
-├── test_integration.py # Comprehensive integration tests (29 tests)
-├── test_hil.py        # Hardware-in-the-Loop test framework (11 tests)
+├── simulation.py          # Multi-physics plant model (16 state variables)
+├── control.py             # Perception system and autonomous controller
+├── mpc_controller.py      # Adaptive MPC with hybrid control
+├── sensors.py             # Sensor models with noise and faults
+├── actuators.py           # Actuator dynamics and faults
+├── scenario_generator.py  # Multi-physics scenario generation
+├── hifi_simulation.py     # High-fidelity closed-loop simulation
+├── server.py              # Flask REST API backend
+├── test_integration.py    # Integration tests (29 tests)
+├── test_hil.py            # HIL test framework (11 tests)
 └── templates/
-    └── index.html     # Real-time dashboard frontend
+    └── index.html         # Real-time dashboard
 ```
 
-### Component Overview
+## Component Overview
 
-| Component | Purpose |
-|-----------|---------|
-| `AqueductSimulation` | 16-variable physics model with thermal, hydraulic, and structural dynamics |
+| Module | Purpose |
+|--------|---------|
+| `AqueductSimulation` | 16-variable physics model with thermal, hydraulic, structural dynamics |
 | `PerceptionSystem` | Multi-physics risk detection with configurable thresholds |
 | `AutonomousController` | PID control with scenario-specific response strategies |
-| `Flask Server` | REST API with health checks, history, and control endpoints |
+| `AdaptiveMPC` | Model Predictive Control with adaptive gain scheduling |
+| `SensorSuite` | Redundant sensors with Kalman filtering and fault injection |
+| `ActuatorSuite` | Gate/valve models with dynamics and safety interlocks |
+| `ScenarioGenerator` | Time-varying environment and multi-physics scenario generation |
+| `ClosedLoopSimulation` | Complete plant-controller integration for HIL testing |
+
+## Scenario Coverage Matrix
+
+| ID | Scenario | Trigger | Controller Response |
+|----|----------|---------|---------------------|
+| S1.1 | Hydraulic Jump | Fr > 0.9 | Raise water level to 7.0m |
+| S1.2 | Surge Wave | Transient flow | Adaptive flow control |
+| S2.1 | Vortex-Induced Vibration | Wind > 12 m/s | Monitor and alert |
+| S3.1 | Thermal Bending | ΔT > 10°C | Increase flow for cooling |
+| S3.2 | Rapid Cooling | Temp drop | Thermal management |
+| S3.3 | Bearing Lock | Locked bearing | Reduce water level to 3.0m |
+| S4.1 | Joint Gap Expansion | Cold weather | Increase water level to 5.0m |
+| S4.2 | Joint Compression | Hot weather | Temperature monitoring |
+| S5.1 | Seismic Event | Ground accel | Emergency response |
+| S5.2 | Aftershock Sequence | Multiple events | Sequential response |
+| S6.1 | Sensor Degradation | Fault injection | Redundancy switching |
+| S6.2 | Actuator Fault | Fault injection | Graceful degradation |
+| COMBINED | Thermal + Seismic | Multi-physics | EMERGENCY: Dump water |
+| MULTI_PHYSICS | Wind + Thermal + Hydraulic | Coupling | Adaptive priority |
+
+## Control Modes
+
+1. **AUTO**: Autonomous MPC/PID with scenario-specific overrides
+2. **MANUAL**: Direct control via API
+3. **EMERGENCY**: Automatic activation for critical scenarios (Q_out=200, Q_in=0)
 
 ## API Endpoints
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/api/state` | GET | Current simulation state with control status |
-| `/api/health` | GET | System health check and metrics |
-| `/api/history` | GET | Historical state data (limit via query param) |
-| `/api/stats` | GET | Statistical summary of simulation |
-| `/api/scenario` | POST | Inject a scenario for testing |
-| `/api/control` | POST | Set control parameters or mode |
+| `/api/state` | GET | Current simulation state |
+| `/api/health` | GET | System health check |
+| `/api/history` | GET | Historical state data |
+| `/api/stats` | GET | Statistical summary |
+| `/api/scenario` | POST | Inject scenario |
+| `/api/control` | POST | Set control mode/parameters |
 | `/api/simulation/pause` | POST | Pause simulation |
 | `/api/simulation/resume` | POST | Resume simulation |
 | `/api/simulation/reset` | POST | Reset to initial state |
 
-## Running the System
+## Installation & Usage
 
-### Installation
+### Requirements
 ```bash
-pip install -r requirements.txt
+pip install flask numpy
 ```
 
-### Start the Server
+### Run Server
 ```bash
 python src/server.py
+# Access: http://localhost:5000
 ```
-Access via browser at `http://localhost:5000`
 
 ### Run Tests
 ```bash
 # Integration tests (29 tests)
 cd src && python -m unittest test_integration -v
 
-# Hardware-in-the-Loop tests (11 tests)
+# HIL tests (11 tests)
 cd src && python test_hil.py
+
+# Full system HIL tests
+cd src && python hifi_simulation.py
 ```
 
 ## Test Coverage
 
 ### Integration Tests (29 tests)
 - Unit tests for simulation, perception, and controller
-- Scenario-specific response tests (S1.1, S3.1, S3.3, S4.1, S5.1)
-- Multi-physics coupling tests
+- All scenario responses (S1.1, S3.1, S3.3, S4.1, S5.1)
+- Multi-physics coupling scenarios
 - Long-duration stability tests
 - Boundary condition tests
 - Full scenario autonomy validation
 
-### HIL Tests (11 tests)
+### HIL Tests (11+ tests)
 - Full scenario simulation with metrics
 - Stress tests (rapid switching, extreme conditions)
 - Autonomy validation (detection, emergency, recovery)
+- Sensor/actuator fault injection
+- Closed-loop performance verification
 
-## Scenario Response Matrix
+## Sensor Model Features
 
-| Scenario | Trigger Condition | Controller Response |
-|----------|------------------|---------------------|
-| S1.1 | Fr > 0.9 | Raise water level to 7.0m |
-| S3.1 | ΔT > 10°C | Increase flow for cooling |
-| S3.3 | Bearing locked | Reduce water level to 3.0m |
-| S4.1 | Joint gap > 25mm | Increase water level to 5.0m |
-| S5.1 | Vibration > 50mm | Reduce flow, prepare emergency |
-| S5.1 + S3.3 | Combined | EMERGENCY: Dump water |
+- **Noise Models**: Gaussian noise, bias, drift
+- **Time Delays**: Configurable measurement delays
+- **Redundancy**: Triple-redundant critical sensors with voting
+- **Kalman Filtering**: State estimation and smoothing
+- **Fault Injection**: Stuck, drift, noise increase, intermittent, complete failure
 
-## Control Modes
+## Actuator Model Features
 
-1. **AUTO**: Autonomous operation with PID level control and scenario responses
-2. **MANUAL**: Direct control of Q_in and Q_out via API
-3. **EMERGENCY**: Automatic activation during critical combined scenarios
+- **Response Dynamics**: First-order response with time constants
+- **Rate Limiting**: Maximum rate of change constraints
+- **Saturation**: Physical limits on positions and flows
+- **Gate Characteristics**: Non-linear flow vs. position
+- **Fault Injection**: Stuck, slow, partial failure, oscillation
+
+## MPC Controller Features
+
+- **Prediction Horizon**: Configurable Np steps
+- **Control Horizon**: Configurable Nc steps
+- **Adaptive Gains**: Scenario-based weight scheduling
+- **Constraint Handling**: Flow limits, rate limits
+- **PID Fallback**: Automatic fallback when MPC fails
+- **Performance Tracking**: Solve count, fallback rate
 
 ## License
 This project is part of the South-to-North Water Diversion Project infrastructure management system.
