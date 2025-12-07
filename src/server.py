@@ -1,4 +1,4 @@
-from flask import Flask, jsonify, request, render_template
+from flask import Flask, jsonify, request, render_template, Response, make_response
 import threading
 import time
 from collections import deque
@@ -18,6 +18,10 @@ from intelligence import get_intelligence
 from visualization import get_dashboard, DashboardLayout, SVGGenerator
 from safety import get_safety_manager, SafetyLevel
 from scada_interface import get_integration
+# V3.5 新增模块
+from config_manager import get_config
+from logging_system import get_logger, log_info, log_warning, log_error, audit
+from api_docs import get_generator, get_swagger_ui_html, get_redoc_html
 
 app = Flask(__name__)
 
@@ -41,6 +45,10 @@ intelligence = get_intelligence()     # 智能化模块
 dashboard = get_dashboard()           # 可视化仪表盘
 safety_manager = get_safety_manager() # 安全管理
 integration = get_integration()       # 工程集成
+# V3.5 新增模块
+config = get_config()                 # 配置管理
+logger = get_logger()                 # 日志系统
+api_generator = get_generator()       # API文档生成
 
 # 状态记录
 last_intelligence_result = {}         # 智能分析结果
@@ -1184,5 +1192,337 @@ def get_full_system_status():
         return jsonify({'error': str(e)}), 500
 
 
+# ============================================================
+# V3.5 新增API端点 - 配置管理
+# ============================================================
+
+@app.route('/api/config')
+def get_all_config():
+    """获取所有配置"""
+    try:
+        return jsonify(config.get_all())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/<section>')
+def get_config_section(section):
+    """获取配置区段"""
+    try:
+        data = config.get_section(section)
+        if not data:
+            return jsonify({'error': f'Section {section} not found'}), 404
+        return jsonify(data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/<section>', methods=['PUT'])
+def update_config_section(section):
+    """更新配置区段"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        success = config.update_section(section, data, author=request.remote_addr)
+        if success:
+            log_info(f"Configuration updated: {section}", category="config",
+                    data=data, user=request.remote_addr)
+            audit("config_update", request.remote_addr, target=section,
+                 details=data, result="success")
+            return jsonify({'status': 'ok'})
+        else:
+            return jsonify({'error': 'Update failed, validation error'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/<section>/<key>', methods=['PUT'])
+def update_config_value(section, key):
+    """更新单个配置值"""
+    try:
+        data = request.json
+        if 'value' not in data:
+            return jsonify({'error': 'Value required'}), 400
+
+        old_value = config.get(section, key)
+        success = config.set(section, key, data['value'], author=request.remote_addr)
+        if success:
+            log_info(f"Config value updated: {section}.{key}", category="config",
+                    data={'old': old_value, 'new': data['value']}, user=request.remote_addr)
+            return jsonify({'status': 'ok', 'old_value': old_value, 'new_value': data['value']})
+        else:
+            return jsonify({'error': 'Update failed'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/history')
+def get_config_history():
+    """获取配置变更历史"""
+    try:
+        limit = request.args.get('limit', default=20, type=int)
+        return jsonify(config.get_version_history(limit))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/export')
+def export_config():
+    """导出配置"""
+    try:
+        format_type = request.args.get('format', default='yaml', type=str)
+        config_str = config.export_config(format_type)
+
+        response = make_response(config_str)
+        if format_type == 'json':
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = 'attachment; filename=taos_config.json'
+        else:
+            response.headers['Content-Type'] = 'application/x-yaml'
+            response.headers['Content-Disposition'] = 'attachment; filename=taos_config.yaml'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/import', methods=['POST'])
+def import_config():
+    """导入配置"""
+    try:
+        data = request.json
+        if not data or 'config' not in data:
+            return jsonify({'error': 'Config data required'}), 400
+
+        format_type = data.get('format', 'yaml')
+        success = config.import_config(data['config'], format_type,
+                                       author=request.remote_addr)
+        if success:
+            audit("config_import", request.remote_addr, target="all",
+                 details={'format': format_type}, result="success")
+            return jsonify({'status': 'ok'})
+        else:
+            return jsonify({'error': 'Import failed'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/config/reset', methods=['POST'])
+def reset_config():
+    """重置配置到默认值"""
+    try:
+        data = request.json or {}
+        section = data.get('section')
+        config.reset_to_defaults(section)
+        audit("config_reset", request.remote_addr, target=section or "all",
+             result="success")
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.5 新增API端点 - 日志系统
+# ============================================================
+
+@app.route('/api/logs')
+def get_logs():
+    """获取日志"""
+    try:
+        level = request.args.get('level')
+        category = request.args.get('category')
+        limit = request.args.get('limit', default=100, type=int)
+        search = request.args.get('search')
+
+        logs = logger.get_recent_logs(count=limit, level=level, category=category)
+        if search:
+            logs = [l for l in logs if search.lower() in l.get('message', '').lower()]
+
+        return jsonify({
+            'count': len(logs),
+            'logs': logs
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/logs/query')
+def query_logs():
+    """查询日志"""
+    try:
+        start_time = request.args.get('start_time')
+        end_time = request.args.get('end_time')
+        level = request.args.get('level')
+        category = request.args.get('category')
+        search = request.args.get('search')
+        limit = request.args.get('limit', default=100, type=int)
+
+        start = datetime.fromisoformat(start_time) if start_time else None
+        end = datetime.fromisoformat(end_time) if end_time else None
+
+        logs = logger.query_logs(start_time=start, end_time=end,
+                                level=level, category=category,
+                                search=search, limit=limit)
+
+        return jsonify({
+            'count': len(logs),
+            'logs': logs
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/logs/statistics')
+def get_log_statistics():
+    """获取日志统计"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(logger.get_log_statistics(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/audit')
+def get_audit_trail():
+    """获取审计记录"""
+    try:
+        category = request.args.get('category')
+        actor = request.args.get('actor')
+        action = request.args.get('action')
+        limit = request.args.get('limit', default=100, type=int)
+
+        entries = logger.get_audit_trail(category=category, actor=actor,
+                                        action=action, limit=limit)
+        return jsonify({
+            'count': len(entries),
+            'entries': entries
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/audit/statistics')
+def get_audit_statistics():
+    """获取审计统计"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        start = datetime.now() - timedelta(hours=hours)
+        return jsonify(logger.get_audit_statistics(start_time=start))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.5 新增API端点 - API文档
+# ============================================================
+
+@app.route('/api/docs')
+@app.route('/api/docs/')
+def api_docs():
+    """Swagger UI 文档页面"""
+    return get_swagger_ui_html('/api/openapi.json')
+
+
+@app.route('/api/redoc')
+def api_redoc():
+    """ReDoc 文档页面"""
+    return get_redoc_html('/api/openapi.json')
+
+
+@app.route('/api/openapi.json')
+def openapi_json():
+    """OpenAPI JSON规范"""
+    return Response(api_generator.get_openapi_json(),
+                   mimetype='application/json')
+
+
+@app.route('/api/openapi.yaml')
+def openapi_yaml():
+    """OpenAPI YAML规范"""
+    return Response(api_generator.get_openapi_yaml(),
+                   mimetype='application/x-yaml')
+
+
+# ============================================================
+# V3.5 新增路由 - 增强版仪表盘
+# ============================================================
+
+@app.route('/dashboard')
+def enhanced_dashboard():
+    """增强版仪表盘页面"""
+    return render_template('dashboard.html')
+
+
+@app.route('/api/version')
+def get_version():
+    """获取系统版本信息"""
+    return jsonify({
+        'name': 'TAOS - Tuanhe Aqueduct Autonomous Operation System',
+        'name_cn': '团河渡槽自主运行系统',
+        'version': '3.5.0',
+        'build_date': '2025-12-07',
+        'features': [
+            '全场景自主运行',
+            '预测与规划',
+            '数据持久化',
+            '智能分析',
+            '可视化仪表盘',
+            '安全管理',
+            '工程集成',
+            '配置管理',
+            '日志审计',
+            'API文档'
+        ]
+    })
+
+
+@app.route('/api/metrics')
+def get_system_metrics():
+    """获取系统性能指标"""
+    try:
+        import os
+        import psutil
+
+        process = psutil.Process(os.getpid())
+
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'uptime_seconds': (datetime.now() - start_time).total_seconds(),
+            'cpu_percent': process.cpu_percent(),
+            'memory_mb': process.memory_info().rss / (1024 * 1024),
+            'thread_count': threading.active_count(),
+            'simulation': {
+                'running': simulation_running,
+                'paused': simulation_paused,
+                'history_size': len(state_history)
+            },
+            'modules': {
+                'persistence': persistence.get_database_stats() if hasattr(persistence, 'get_database_stats') else {},
+                'safety': safety_manager.get_safety_summary() if hasattr(safety_manager, 'get_safety_summary') else {},
+                'config': {'version': config.current_version}
+            }
+        })
+    except ImportError:
+        # psutil not available
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'uptime_seconds': (datetime.now() - start_time).total_seconds(),
+            'thread_count': threading.active_count(),
+            'simulation': {
+                'running': simulation_running,
+                'paused': simulation_paused,
+                'history_size': len(state_history)
+            }
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# 启动时记录日志
+log_info("TAOS V3.5 Server starting", category="system")
+
+
 if __name__ == '__main__':
+    log_info("TAOS V3.5 Server started on port 5000", category="system")
     app.run(host='0.0.0.0', port=5000)

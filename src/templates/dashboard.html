@@ -1,0 +1,1654 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TAOS V3.5 - 团河渡槽自主运行系统</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #1976d2;
+            --success: #4caf50;
+            --warning: #ff9800;
+            --danger: #f44336;
+            --info: #2196f3;
+            --dark: #263238;
+            --light: #eceff1;
+            --bg: #f5f7fa;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg);
+            color: #333;
+            min-height: 100vh;
+        }
+
+        /* Header */
+        .header {
+            background: linear-gradient(135deg, var(--dark) 0%, #37474f 100%);
+            color: white;
+            padding: 12px 24px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+        }
+
+        .header h1 {
+            font-size: 1.4em;
+            font-weight: 500;
+        }
+
+        .header-status {
+            display: flex;
+            gap: 20px;
+            align-items: center;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: rgba(255,255,255,0.1);
+            border-radius: 20px;
+            font-size: 0.9em;
+        }
+
+        .status-dot {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.normal { background: var(--success); }
+        .status-dot.warning { background: var(--warning); }
+        .status-dot.danger { background: var(--danger); animation: pulse-fast 0.5s infinite; }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        @keyframes pulse-fast {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.7; transform: scale(1.2); }
+        }
+
+        /* Navigation Tabs */
+        .nav-tabs {
+            background: white;
+            display: flex;
+            border-bottom: 1px solid #ddd;
+            padding: 0 20px;
+        }
+
+        .nav-tab {
+            padding: 14px 24px;
+            cursor: pointer;
+            border-bottom: 3px solid transparent;
+            color: #666;
+            font-weight: 500;
+            transition: all 0.2s;
+        }
+
+        .nav-tab:hover { color: var(--primary); }
+        .nav-tab.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 20px;
+            display: none;
+        }
+
+        .main-content.active { display: block; }
+
+        /* Cards */
+        .card {
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.08);
+            margin-bottom: 20px;
+            overflow: hidden;
+        }
+
+        .card-header {
+            padding: 14px 20px;
+            border-bottom: 1px solid #eee;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-size: 1em;
+            font-weight: 600;
+            color: var(--dark);
+        }
+
+        .card-body { padding: 20px; }
+
+        /* Grid Layouts */
+        .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 20px; }
+        .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 20px; }
+        .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; }
+
+        @media (max-width: 1200px) {
+            .grid-4 { grid-template-columns: repeat(2, 1fr); }
+            .grid-3 { grid-template-columns: repeat(2, 1fr); }
+        }
+
+        @media (max-width: 768px) {
+            .grid-2, .grid-3, .grid-4 { grid-template-columns: 1fr; }
+        }
+
+        /* Gauge */
+        .gauge-container {
+            text-align: center;
+            padding: 15px;
+        }
+
+        .gauge {
+            position: relative;
+            width: 140px;
+            height: 70px;
+            margin: 0 auto;
+        }
+
+        .gauge-bg {
+            position: absolute;
+            width: 140px;
+            height: 70px;
+            border-radius: 70px 70px 0 0;
+            background: linear-gradient(to right, var(--success), var(--warning), var(--danger));
+            overflow: hidden;
+        }
+
+        .gauge-fill {
+            position: absolute;
+            bottom: 0;
+            left: 5px;
+            width: 130px;
+            height: 65px;
+            background: white;
+            border-radius: 65px 65px 0 0;
+        }
+
+        .gauge-needle {
+            position: absolute;
+            bottom: 0;
+            left: 50%;
+            width: 4px;
+            height: 55px;
+            background: var(--dark);
+            transform-origin: bottom center;
+            transform: translateX(-50%) rotate(-90deg);
+            transition: transform 0.5s ease-out;
+            border-radius: 2px;
+        }
+
+        .gauge-center {
+            position: absolute;
+            bottom: -5px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 14px;
+            height: 14px;
+            background: var(--dark);
+            border-radius: 50%;
+        }
+
+        .gauge-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            color: var(--dark);
+            margin-top: 8px;
+        }
+
+        .gauge-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .gauge-unit {
+            font-size: 0.75em;
+            color: #999;
+        }
+
+        /* Metrics */
+        .metric-box {
+            background: var(--light);
+            padding: 16px;
+            border-radius: 8px;
+            text-align: center;
+        }
+
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: var(--primary);
+        }
+
+        .metric-label {
+            font-size: 0.85em;
+            color: #666;
+            margin-top: 4px;
+        }
+
+        .metric-trend {
+            font-size: 0.8em;
+            margin-top: 4px;
+        }
+
+        .metric-trend.up { color: var(--danger); }
+        .metric-trend.down { color: var(--success); }
+        .metric-trend.stable { color: #999; }
+
+        /* Alert Panel */
+        .alert-panel {
+            padding: 12px 16px;
+            border-radius: 6px;
+            margin-bottom: 12px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .alert-info { background: #e3f2fd; border-left: 4px solid var(--info); }
+        .alert-warning { background: #fff3e0; border-left: 4px solid var(--warning); }
+        .alert-danger { background: #ffebee; border-left: 4px solid var(--danger); }
+        .alert-success { background: #e8f5e9; border-left: 4px solid var(--success); }
+
+        .alert-icon { font-size: 1.2em; }
+        .alert-content { flex: 1; }
+        .alert-title { font-weight: 600; margin-bottom: 2px; }
+        .alert-message { font-size: 0.9em; color: #666; }
+        .alert-time { font-size: 0.8em; color: #999; }
+
+        /* Buttons */
+        .btn {
+            padding: 10px 20px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-weight: 500;
+            transition: all 0.2s;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .btn-primary { background: var(--primary); color: white; }
+        .btn-success { background: var(--success); color: white; }
+        .btn-warning { background: var(--warning); color: white; }
+        .btn-danger { background: var(--danger); color: white; }
+        .btn-outline { background: transparent; border: 1px solid #ccc; }
+
+        .btn:hover { opacity: 0.9; transform: translateY(-1px); }
+        .btn:active { transform: translateY(0); }
+
+        .btn-group { display: flex; gap: 8px; flex-wrap: wrap; }
+
+        /* Tables */
+        .table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .table th, .table td {
+            padding: 12px;
+            text-align: left;
+            border-bottom: 1px solid #eee;
+        }
+
+        .table th {
+            background: var(--light);
+            font-weight: 600;
+            color: #555;
+        }
+
+        .table tr:hover { background: #f9f9f9; }
+
+        /* Topology View */
+        .topology-container {
+            position: relative;
+            height: 400px;
+            background: linear-gradient(180deg, #e3f2fd 0%, #bbdefb 100%);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .topology-svg {
+            width: 100%;
+            height: 100%;
+        }
+
+        /* Timeline */
+        .timeline {
+            position: relative;
+            padding-left: 30px;
+        }
+
+        .timeline::before {
+            content: '';
+            position: absolute;
+            left: 10px;
+            top: 0;
+            bottom: 0;
+            width: 2px;
+            background: #ddd;
+        }
+
+        .timeline-item {
+            position: relative;
+            padding-bottom: 20px;
+        }
+
+        .timeline-item::before {
+            content: '';
+            position: absolute;
+            left: -24px;
+            top: 4px;
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: var(--primary);
+        }
+
+        .timeline-item.warning::before { background: var(--warning); }
+        .timeline-item.danger::before { background: var(--danger); }
+        .timeline-item.success::before { background: var(--success); }
+
+        /* Progress Bar */
+        .progress {
+            height: 8px;
+            background: #e0e0e0;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .progress-bar {
+            height: 100%;
+            background: var(--primary);
+            transition: width 0.3s;
+        }
+
+        /* Form Controls */
+        .form-group {
+            margin-bottom: 16px;
+        }
+
+        .form-label {
+            display: block;
+            margin-bottom: 6px;
+            font-weight: 500;
+            color: #555;
+        }
+
+        .form-control {
+            width: 100%;
+            padding: 10px 12px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 1em;
+            transition: border-color 0.2s;
+        }
+
+        .form-control:focus {
+            outline: none;
+            border-color: var(--primary);
+        }
+
+        /* Switch Toggle */
+        .switch {
+            position: relative;
+            width: 50px;
+            height: 26px;
+        }
+
+        .switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: #ccc;
+            border-radius: 26px;
+            transition: 0.3s;
+        }
+
+        .slider::before {
+            position: absolute;
+            content: '';
+            height: 20px;
+            width: 20px;
+            left: 3px;
+            bottom: 3px;
+            background: white;
+            border-radius: 50%;
+            transition: 0.3s;
+        }
+
+        input:checked + .slider { background: var(--primary); }
+        input:checked + .slider::before { transform: translateX(24px); }
+
+        /* Chart Container */
+        .chart-container {
+            position: relative;
+            height: 250px;
+        }
+
+        /* Safety Level */
+        .safety-level {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 16px;
+            border-radius: 8px;
+            font-weight: 600;
+        }
+
+        .safety-normal { background: #e8f5e9; color: #2e7d32; }
+        .safety-caution { background: #fff3e0; color: #ef6c00; }
+        .safety-warning { background: #fff8e1; color: #f9a825; }
+        .safety-danger { background: #ffebee; color: #c62828; }
+        .safety-emergency { background: #f44336; color: white; animation: flash 0.5s infinite; }
+
+        @keyframes flash {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.7; }
+        }
+
+        /* Scenario Card */
+        .scenario-card {
+            border: 1px solid #eee;
+            border-radius: 8px;
+            padding: 12px;
+            margin-bottom: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .scenario-card:hover {
+            border-color: var(--primary);
+            box-shadow: 0 2px 8px rgba(25, 118, 210, 0.15);
+        }
+
+        .scenario-card.active {
+            border-color: var(--primary);
+            background: #e3f2fd;
+        }
+
+        .scenario-name { font-weight: 600; color: var(--dark); }
+        .scenario-desc { font-size: 0.85em; color: #666; margin-top: 4px; }
+
+        /* Log Entry */
+        .log-entry {
+            font-family: 'Consolas', 'Monaco', monospace;
+            font-size: 0.85em;
+            padding: 6px 10px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .log-time { color: #999; margin-right: 10px; }
+        .log-level { padding: 2px 6px; border-radius: 3px; margin-right: 8px; font-size: 0.8em; }
+        .log-level.info { background: #e3f2fd; color: #1976d2; }
+        .log-level.warn { background: #fff3e0; color: #f57c00; }
+        .log-level.error { background: #ffebee; color: #d32f2f; }
+
+        /* Hidden */
+        .hidden { display: none !important; }
+    </style>
+</head>
+<body>
+    <!-- Header -->
+    <div class="header">
+        <h1>TAOS V3.5 - 团河渡槽自主运行系统</h1>
+        <div class="header-status">
+            <div class="status-indicator">
+                <span class="status-dot" id="systemStatusDot"></span>
+                <span id="systemStatus">系统正常</span>
+            </div>
+            <div class="status-indicator">
+                <span>仿真时间:</span>
+                <span id="simTime">0.0s</span>
+            </div>
+            <div class="status-indicator">
+                <span>更新频率:</span>
+                <span id="updateRate">2Hz</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Navigation -->
+    <div class="nav-tabs">
+        <div class="nav-tab active" data-tab="overview">概览</div>
+        <div class="nav-tab" data-tab="monitoring">实时监控</div>
+        <div class="nav-tab" data-tab="scenarios">场景控制</div>
+        <div class="nav-tab" data-tab="safety">安全监控</div>
+        <div class="nav-tab" data-tab="analytics">智能分析</div>
+        <div class="nav-tab" data-tab="history">历史数据</div>
+        <div class="nav-tab" data-tab="config">系统配置</div>
+    </div>
+
+    <!-- Tab: Overview -->
+    <div class="main-content active" id="tab-overview">
+        <div class="grid-4">
+            <div class="gauge-container card">
+                <div class="gauge">
+                    <div class="gauge-bg"></div>
+                    <div class="gauge-fill"></div>
+                    <div class="gauge-needle" id="gauge-h"></div>
+                    <div class="gauge-center"></div>
+                </div>
+                <div class="gauge-value" id="val-h">4.00</div>
+                <div class="gauge-label">水位</div>
+                <div class="gauge-unit">米 (m)</div>
+            </div>
+            <div class="gauge-container card">
+                <div class="gauge">
+                    <div class="gauge-bg"></div>
+                    <div class="gauge-fill"></div>
+                    <div class="gauge-needle" id="gauge-v"></div>
+                    <div class="gauge-center"></div>
+                </div>
+                <div class="gauge-value" id="val-v">2.00</div>
+                <div class="gauge-label">流速</div>
+                <div class="gauge-unit">米/秒 (m/s)</div>
+            </div>
+            <div class="gauge-container card">
+                <div class="gauge">
+                    <div class="gauge-bg"></div>
+                    <div class="gauge-fill"></div>
+                    <div class="gauge-needle" id="gauge-fr"></div>
+                    <div class="gauge-center"></div>
+                </div>
+                <div class="gauge-value" id="val-fr">0.32</div>
+                <div class="gauge-label">弗劳德数</div>
+                <div class="gauge-unit">Fr</div>
+            </div>
+            <div class="gauge-container card">
+                <div class="gauge">
+                    <div class="gauge-bg"></div>
+                    <div class="gauge-fill"></div>
+                    <div class="gauge-needle" id="gauge-gap"></div>
+                    <div class="gauge-center"></div>
+                </div>
+                <div class="gauge-value" id="val-gap">20.0</div>
+                <div class="gauge-label">伸缩缝间隙</div>
+                <div class="gauge-unit">毫米 (mm)</div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">渡槽拓扑视图</span>
+                </div>
+                <div class="card-body">
+                    <div class="topology-container">
+                        <svg class="topology-svg" id="topologySvg" viewBox="0 0 800 400"></svg>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">系统状态</span>
+                    </div>
+                    <div class="card-body">
+                        <div class="safety-level" id="safetyLevel">
+                            <span>安全等级: 正常</span>
+                        </div>
+                        <div style="margin-top: 16px;">
+                            <div class="grid-2" style="gap: 10px;">
+                                <div class="metric-box">
+                                    <div class="metric-value" id="val-Tsun">20.0</div>
+                                    <div class="metric-label">向阳侧温度 (°C)</div>
+                                </div>
+                                <div class="metric-box">
+                                    <div class="metric-value" id="val-Tshade">20.0</div>
+                                    <div class="metric-label">背阴侧温度 (°C)</div>
+                                </div>
+                                <div class="metric-box">
+                                    <div class="metric-value" id="val-vib">0.0</div>
+                                    <div class="metric-label">振动幅度 (mm)</div>
+                                </div>
+                                <div class="metric-box">
+                                    <div class="metric-value" id="val-bend">0.0</div>
+                                    <div class="metric-label">弯曲变形 (mm)</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header">
+                        <span class="card-title">活动场景</span>
+                    </div>
+                    <div class="card-body" id="activeScenarios">
+                        <div class="alert-panel alert-success">
+                            <span class="alert-icon">&#10003;</span>
+                            <div class="alert-content">
+                                <div class="alert-title">正常运行</div>
+                                <div class="alert-message">当前无活动场景</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">温度趋势</span>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="tempChart"></canvas>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">水力参数趋势</span>
+                </div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="hydraulicChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Monitoring -->
+    <div class="main-content" id="tab-monitoring">
+        <div class="grid-3">
+            <div class="card">
+                <div class="card-header"><span class="card-title">水力参数</span></div>
+                <div class="card-body">
+                    <table class="table">
+                        <tr><th>参数</th><th>当前值</th><th>正常范围</th></tr>
+                        <tr><td>水位 h</td><td id="mon-h">4.00 m</td><td>3.0 - 6.0 m</td></tr>
+                        <tr><td>流速 v</td><td id="mon-v">2.00 m/s</td><td>1.5 - 3.5 m/s</td></tr>
+                        <tr><td>弗劳德数 Fr</td><td id="mon-fr">0.32</td><td>&lt; 0.8</td></tr>
+                        <tr><td>流量 Q</td><td id="mon-q">240 m³/s</td><td>200 - 320 m³/s</td></tr>
+                        <tr><td>入口流量</td><td id="mon-qin">240 m³/s</td><td>-</td></tr>
+                        <tr><td>出口流量</td><td id="mon-qout">240 m³/s</td><td>-</td></tr>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">结构参数</span></div>
+                <div class="card-body">
+                    <table class="table">
+                        <tr><th>参数</th><th>当前值</th><th>警戒值</th></tr>
+                        <tr><td>伸缩缝间隙</td><td id="mon-gap">20.0 mm</td><td>&lt; 5 或 &gt; 35 mm</td></tr>
+                        <tr><td>弯曲变形</td><td id="mon-bend">0.0 mm</td><td>&gt; 50 mm</td></tr>
+                        <tr><td>振动幅度</td><td id="mon-vib">0.0 mm</td><td>&gt; 10 mm</td></tr>
+                        <tr><td>振动频率</td><td id="mon-vibf">0.0 Hz</td><td>共振区</td></tr>
+                        <tr><td>支座状态</td><td id="mon-bearing">正常</td><td>锁死/脱落</td></tr>
+                        <tr><td>裂缝宽度</td><td id="mon-crack">0.0 mm</td><td>&gt; 0.3 mm</td></tr>
+                    </table>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">热力参数</span></div>
+                <div class="card-body">
+                    <table class="table">
+                        <tr><th>参数</th><th>当前值</th><th>警戒值</th></tr>
+                        <tr><td>向阳侧温度</td><td id="mon-tsun">20.0 °C</td><td>&gt; 50°C</td></tr>
+                        <tr><td>背阴侧温度</td><td id="mon-tshade">20.0 °C</td><td>-</td></tr>
+                        <tr><td>温差 ΔT</td><td id="mon-dt">0.0 °C</td><td>&gt; 20°C</td></tr>
+                        <tr><td>太阳辐射</td><td id="mon-solar">0.0 kW/m²</td><td>&gt; 0.8</td></tr>
+                        <tr><td>环境温度</td><td id="mon-tamb">20 °C</td><td>-</td></tr>
+                        <tr><td>冰层厚度</td><td id="mon-ice">0 mm</td><td>&gt; 10 mm</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">多参数趋势图</span>
+                <div class="btn-group">
+                    <button class="btn btn-outline" onclick="setChartRange(60)">1分钟</button>
+                    <button class="btn btn-outline" onclick="setChartRange(300)">5分钟</button>
+                    <button class="btn btn-outline" onclick="setChartRange(600)">10分钟</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 350px;">
+                    <canvas id="multiParamChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Scenarios -->
+    <div class="main-content" id="tab-scenarios">
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header"><span class="card-title">场景注入器</span></div>
+                <div class="card-body">
+                    <h4 style="margin-bottom: 12px; color: #666;">水力场景 (S1.x)</h4>
+                    <div class="scenario-card" onclick="injectScenario('S1.1')">
+                        <div class="scenario-name">S1.1 - 水跃/急流</div>
+                        <div class="scenario-desc">弗劳德数超过0.8, 产生水跃</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S1.2')">
+                        <div class="scenario-name">S1.2 - 入口流量骤增</div>
+                        <div class="scenario-desc">上游来水突然增加50%</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S1.3')">
+                        <div class="scenario-name">S1.3 - 出口堵塞</div>
+                        <div class="scenario-desc">出口受阻导致水位上涨</div>
+                    </div>
+
+                    <h4 style="margin: 20px 0 12px; color: #666;">热力场景 (S3.x)</h4>
+                    <div class="scenario-card" onclick="injectScenario('S3.1')">
+                        <div class="scenario-name">S3.1 - 日照弯曲</div>
+                        <div class="scenario-desc">强日照导致温差弯曲</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S3.2')">
+                        <div class="scenario-name">S3.2 - 急速降温</div>
+                        <div class="scenario-desc">温度骤降导致收缩</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S3.3')">
+                        <div class="scenario-name">S3.3 - 支座锁死</div>
+                        <div class="scenario-desc">热膨胀无法释放</div>
+                    </div>
+
+                    <h4 style="margin: 20px 0 12px; color: #666;">结构场景 (S4.x/S5.x)</h4>
+                    <div class="scenario-card" onclick="injectScenario('S4.1')">
+                        <div class="scenario-name">S4.1 - 伸缩缝撕裂</div>
+                        <div class="scenario-desc">低温导致缝隙过大</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S5.1')">
+                        <div class="scenario-name">S5.1 - 地震</div>
+                        <div class="scenario-desc">地震导致强烈振动</div>
+                    </div>
+                    <div class="scenario-card" onclick="injectScenario('S5.2')">
+                        <div class="scenario-name">S5.2 - 车辆碰撞</div>
+                        <div class="scenario-desc">支墩受到碰撞冲击</div>
+                    </div>
+
+                    <div style="margin-top: 20px; padding-top: 16px; border-top: 1px solid #eee;">
+                        <button class="btn btn-success" onclick="injectScenario('NORMAL')">恢复正常运行</button>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <div class="card">
+                    <div class="card-header"><span class="card-title">场景时间线</span></div>
+                    <div class="card-body" id="scenarioTimeline">
+                        <div class="timeline" id="timelineContent">
+                            <div class="timeline-item">
+                                <div><strong>系统启动</strong></div>
+                                <div style="font-size: 0.85em; color: #666;">0.0s - 初始化完成</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="card">
+                    <div class="card-header"><span class="card-title">场景统计</span></div>
+                    <div class="card-body">
+                        <div class="grid-2" style="gap: 10px;">
+                            <div class="metric-box">
+                                <div class="metric-value" id="stat-total">0</div>
+                                <div class="metric-label">总场景数</div>
+                            </div>
+                            <div class="metric-box">
+                                <div class="metric-value" id="stat-handled">0</div>
+                                <div class="metric-label">已处理</div>
+                            </div>
+                            <div class="metric-box">
+                                <div class="metric-value" id="stat-rate">0%</div>
+                                <div class="metric-label">处理率</div>
+                            </div>
+                            <div class="metric-box">
+                                <div class="metric-value" id="stat-avgtime">0s</div>
+                                <div class="metric-label">平均响应</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Safety -->
+    <div class="main-content" id="tab-safety">
+        <div class="grid-3">
+            <div class="card">
+                <div class="card-header"><span class="card-title">安全概览</span></div>
+                <div class="card-body">
+                    <div class="safety-level safety-normal" id="overallSafety">
+                        <span style="font-size: 1.5em;">&#9679;</span>
+                        <span>整体安全等级: 正常</span>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>水力安全</span>
+                            <span id="safety-hydraulic">100%</span>
+                        </div>
+                        <div class="progress"><div class="progress-bar" id="bar-hydraulic" style="width: 100%; background: var(--success);"></div></div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>结构安全</span>
+                            <span id="safety-structural">100%</span>
+                        </div>
+                        <div class="progress"><div class="progress-bar" id="bar-structural" style="width: 100%; background: var(--success);"></div></div>
+                    </div>
+                    <div style="margin-top: 12px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                            <span>热力安全</span>
+                            <span id="safety-thermal">100%</span>
+                        </div>
+                        <div class="progress"><div class="progress-bar" id="bar-thermal" style="width: 100%; background: var(--success);"></div></div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">故障诊断</span></div>
+                <div class="card-body" id="faultList">
+                    <div class="alert-panel alert-success">
+                        <span class="alert-icon">&#10003;</span>
+                        <div class="alert-content">
+                            <div class="alert-title">无故障</div>
+                            <div class="alert-message">系统运行正常</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">联锁状态</span></div>
+                <div class="card-body" id="interlockList">
+                    <table class="table">
+                        <tr><th>联锁</th><th>状态</th></tr>
+                        <tr><td>高水位保护</td><td style="color: var(--success);">就绪</td></tr>
+                        <tr><td>低水位保护</td><td style="color: var(--success);">就绪</td></tr>
+                        <tr><td>超速保护</td><td style="color: var(--success);">就绪</td></tr>
+                        <tr><td>振动保护</td><td style="color: var(--success);">就绪</td></tr>
+                        <tr><td>温差保护</td><td style="color: var(--success);">就绪</td></tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><span class="card-title">应急响应</span></div>
+            <div class="card-body">
+                <div class="btn-group">
+                    <button class="btn btn-danger" onclick="triggerEmergency('STOP')">紧急停止</button>
+                    <button class="btn btn-warning" onclick="triggerEmergency('DRAIN')">快速排水</button>
+                    <button class="btn btn-info" onclick="triggerEmergency('ISOLATE')">隔离区段</button>
+                    <button class="btn btn-success" onclick="triggerEmergency('RESET')">复位系统</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Analytics -->
+    <div class="main-content" id="tab-analytics">
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header"><span class="card-title">预测分析</span></div>
+                <div class="card-body">
+                    <div class="chart-container">
+                        <canvas id="predictionChart"></canvas>
+                    </div>
+                    <div style="margin-top: 16px;">
+                        <table class="table">
+                            <tr><th>参数</th><th>当前值</th><th>1分钟预测</th><th>趋势</th></tr>
+                            <tr>
+                                <td>水位</td>
+                                <td id="pred-h-now">4.00 m</td>
+                                <td id="pred-h-future">4.00 m</td>
+                                <td id="pred-h-trend">-</td>
+                            </tr>
+                            <tr>
+                                <td>流速</td>
+                                <td id="pred-v-now">2.00 m/s</td>
+                                <td id="pred-v-future">2.00 m/s</td>
+                                <td id="pred-v-trend">-</td>
+                            </tr>
+                            <tr>
+                                <td>温差</td>
+                                <td id="pred-dt-now">0.0 °C</td>
+                                <td id="pred-dt-future">0.0 °C</td>
+                                <td id="pred-dt-trend">-</td>
+                            </tr>
+                        </table>
+                    </div>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">异常检测</span></div>
+                <div class="card-body" id="anomalyList">
+                    <div class="alert-panel alert-success">
+                        <span class="alert-icon">&#10003;</span>
+                        <div class="alert-content">
+                            <div class="alert-title">无异常</div>
+                            <div class="alert-message">所有参数在正常范围内</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><span class="card-title">模式识别</span></div>
+            <div class="card-body">
+                <div id="patternList" class="grid-4">
+                    <div class="metric-box">
+                        <div class="metric-value">-</div>
+                        <div class="metric-label">当前模式</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value">0%</div>
+                        <div class="metric-label">置信度</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value">-</div>
+                        <div class="metric-label">建议操作</div>
+                    </div>
+                    <div class="metric-box">
+                        <div class="metric-value">0</div>
+                        <div class="metric-label">历史匹配</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: History -->
+    <div class="main-content" id="tab-history">
+        <div class="card">
+            <div class="card-header">
+                <span class="card-title">历史数据查询</span>
+                <div class="btn-group">
+                    <select class="form-control" style="width: auto;" id="historyRange">
+                        <option value="5">最近5分钟</option>
+                        <option value="30">最近30分钟</option>
+                        <option value="60">最近1小时</option>
+                        <option value="360">最近6小时</option>
+                    </select>
+                    <button class="btn btn-primary" onclick="loadHistory()">查询</button>
+                    <button class="btn btn-outline" onclick="exportHistory('csv')">导出CSV</button>
+                    <button class="btn btn-outline" onclick="exportHistory('json')">导出JSON</button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 350px;">
+                    <canvas id="historyChart"></canvas>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><span class="card-title">事件日志</span></div>
+            <div class="card-body" id="eventLog" style="max-height: 400px; overflow-y: auto;">
+                <div class="log-entry">
+                    <span class="log-time">00:00:00</span>
+                    <span class="log-level info">INFO</span>
+                    <span>系统初始化完成</span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Tab: Config -->
+    <div class="main-content" id="tab-config">
+        <div class="grid-2">
+            <div class="card">
+                <div class="card-header"><span class="card-title">控制参数</span></div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">目标水位 (m)</label>
+                        <input type="number" class="form-control" id="cfg-target-h" value="4.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">目标流速 (m/s)</label>
+                        <input type="number" class="form-control" id="cfg-target-v" value="2.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">控制增益 Kp</label>
+                        <input type="number" class="form-control" id="cfg-kp" value="0.5" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">控制增益 Ki</label>
+                        <input type="number" class="form-control" id="cfg-ki" value="0.1" step="0.01">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveControlConfig()">保存控制参数</button>
+                </div>
+            </div>
+            <div class="card">
+                <div class="card-header"><span class="card-title">报警阈值</span></div>
+                <div class="card-body">
+                    <div class="form-group">
+                        <label class="form-label">高水位报警 (m)</label>
+                        <input type="number" class="form-control" id="cfg-h-high" value="6.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">低水位报警 (m)</label>
+                        <input type="number" class="form-control" id="cfg-h-low" value="3.0" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">温差报警 (°C)</label>
+                        <input type="number" class="form-control" id="cfg-dt-alarm" value="20" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">振动报警 (mm)</label>
+                        <input type="number" class="form-control" id="cfg-vib-alarm" value="10" step="0.5">
+                    </div>
+                    <button class="btn btn-primary" onclick="saveAlarmConfig()">保存报警阈值</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-header"><span class="card-title">系统设置</span></div>
+            <div class="card-body">
+                <div class="grid-3">
+                    <div class="form-group">
+                        <label class="form-label">仿真步长 (秒)</label>
+                        <input type="number" class="form-control" id="cfg-dt" value="0.5" step="0.1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">数据刷新率 (Hz)</label>
+                        <input type="number" class="form-control" id="cfg-refresh" value="2" step="1">
+                    </div>
+                    <div class="form-group">
+                        <label class="form-label">历史保留时间 (小时)</label>
+                        <input type="number" class="form-control" id="cfg-retention" value="24" step="1">
+                    </div>
+                </div>
+                <div style="margin-top: 16px;">
+                    <label style="display: flex; align-items: center; gap: 12px;">
+                        <label class="switch">
+                            <input type="checkbox" id="cfg-auto-control" checked>
+                            <span class="slider"></span>
+                        </label>
+                        <span>启用自动控制</span>
+                    </label>
+                </div>
+                <div style="margin-top: 12px;">
+                    <label style="display: flex; align-items: center; gap: 12px;">
+                        <label class="switch">
+                            <input type="checkbox" id="cfg-safety-interlock" checked>
+                            <span class="slider"></span>
+                        </label>
+                        <span>启用安全联锁</span>
+                    </label>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // ========== State Management ==========
+        let state = {};
+        let chartData = { temp: [], hydraulic: [], time: [] };
+        let charts = {};
+        let updateInterval = 500;
+
+        // ========== Tab Navigation ==========
+        document.querySelectorAll('.nav-tab').forEach(tab => {
+            tab.addEventListener('click', () => {
+                document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+                document.querySelectorAll('.main-content').forEach(c => c.classList.remove('active'));
+                tab.classList.add('active');
+                document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+            });
+        });
+
+        // ========== Chart Initialization ==========
+        function initCharts() {
+            const chartOptions = {
+                responsive: true,
+                maintainAspectRatio: false,
+                animation: { duration: 0 },
+                scales: {
+                    x: { display: true },
+                    y: { beginAtZero: false }
+                },
+                plugins: { legend: { position: 'top' } }
+            };
+
+            // Temperature Chart
+            charts.temp = new Chart(document.getElementById('tempChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: '向阳侧温度', borderColor: '#f44336', backgroundColor: 'rgba(244,67,54,0.1)', fill: true, data: [], tension: 0.3 },
+                        { label: '背阴侧温度', borderColor: '#2196f3', backgroundColor: 'rgba(33,150,243,0.1)', fill: true, data: [], tension: 0.3 }
+                    ]
+                },
+                options: chartOptions
+            });
+
+            // Hydraulic Chart
+            charts.hydraulic = new Chart(document.getElementById('hydraulicChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: '水位 (m)', borderColor: '#1976d2', data: [], yAxisID: 'y', tension: 0.3 },
+                        { label: '流速 (m/s)', borderColor: '#4caf50', data: [], yAxisID: 'y1', tension: 0.3 }
+                    ]
+                },
+                options: {
+                    ...chartOptions,
+                    scales: {
+                        y: { type: 'linear', position: 'left' },
+                        y1: { type: 'linear', position: 'right', grid: { drawOnChartArea: false } }
+                    }
+                }
+            });
+
+            // Multi-param Chart
+            charts.multiParam = new Chart(document.getElementById('multiParamChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: '水位', borderColor: '#1976d2', data: [], tension: 0.3 },
+                        { label: '流速', borderColor: '#4caf50', data: [], tension: 0.3 },
+                        { label: 'Fr数', borderColor: '#ff9800', data: [], tension: 0.3 },
+                        { label: '缝隙', borderColor: '#9c27b0', data: [], tension: 0.3 }
+                    ]
+                },
+                options: chartOptions
+            });
+
+            // Prediction Chart
+            charts.prediction = new Chart(document.getElementById('predictionChart'), {
+                type: 'line',
+                data: {
+                    labels: [],
+                    datasets: [
+                        { label: '实际水位', borderColor: '#1976d2', data: [], tension: 0.3 },
+                        { label: '预测水位', borderColor: '#1976d2', borderDash: [5, 5], data: [], tension: 0.3 }
+                    ]
+                },
+                options: chartOptions
+            });
+
+            // History Chart
+            charts.history = new Chart(document.getElementById('historyChart'), {
+                type: 'line',
+                data: { labels: [], datasets: [] },
+                options: chartOptions
+            });
+        }
+
+        // ========== Gauge Update ==========
+        function updateGauge(id, value, min, max) {
+            const needle = document.getElementById(id);
+            if (!needle) return;
+            const percent = Math.max(0, Math.min(1, (value - min) / (max - min)));
+            const angle = -90 + (percent * 180);
+            needle.style.transform = `translateX(-50%) rotate(${angle}deg)`;
+        }
+
+        // ========== Topology Drawing ==========
+        function drawTopology(state) {
+            const svg = document.getElementById('topologySvg');
+            if (!svg) return;
+
+            const waterLevel = state.h || 4.0;
+            const waterHeight = Math.min(80, (waterLevel / 8) * 80);
+            const sunIntensity = (state.solar_rad || 0) * 255;
+            const vibration = state.vib_amp || 0;
+            const vibOffset = vibration > 5 ? Math.sin(Date.now() / 50) * 3 : 0;
+
+            svg.innerHTML = `
+                <!-- Sky and Sun -->
+                <defs>
+                    <linearGradient id="skyGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#87CEEB"/>
+                        <stop offset="100%" style="stop-color:#E0F4FF"/>
+                    </linearGradient>
+                    <linearGradient id="waterGradient" x1="0%" y1="0%" x2="0%" y2="100%">
+                        <stop offset="0%" style="stop-color:#2196F3"/>
+                        <stop offset="100%" style="stop-color:#1565C0"/>
+                    </linearGradient>
+                </defs>
+
+                <rect x="0" y="0" width="800" height="400" fill="url(#skyGradient)"/>
+
+                <!-- Sun -->
+                <circle cx="700" cy="60" r="${30 + (state.solar_rad || 0) * 20}"
+                    fill="rgb(255, ${255 - sunIntensity * 0.3}, 0)" opacity="${0.3 + (state.solar_rad || 0) * 0.7}"/>
+
+                <!-- Ground -->
+                <rect x="0" y="350" width="800" height="50" fill="#8B7355"/>
+
+                <!-- Pillars -->
+                <rect x="100" y="200" width="30" height="150" fill="#607D8B" transform="translate(0, ${vibOffset})"/>
+                <rect x="300" y="200" width="30" height="150" fill="#607D8B" transform="translate(0, ${vibOffset})"/>
+                <rect x="500" y="200" width="30" height="150" fill="#607D8B" transform="translate(0, ${vibOffset})"/>
+                <rect x="670" y="200" width="30" height="150" fill="#607D8B" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Aqueduct Body -->
+                <path d="M 80 200 L 80 280 L 720 280 L 720 200 L 700 200 L 700 260 L 100 260 L 100 200 Z"
+                    fill="#90A4AE" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Water -->
+                <rect x="105" y="${260 - waterHeight}" width="590" height="${waterHeight}"
+                    fill="url(#waterGradient)" opacity="0.9" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Flow arrows -->
+                <path d="M 150 ${240 - waterHeight/2} L 200 ${240 - waterHeight/2} L 190 ${230 - waterHeight/2} M 200 ${240 - waterHeight/2} L 190 ${250 - waterHeight/2}"
+                    stroke="white" stroke-width="3" fill="none" transform="translate(0, ${vibOffset})"/>
+                <path d="M 350 ${240 - waterHeight/2} L 400 ${240 - waterHeight/2} L 390 ${230 - waterHeight/2} M 400 ${240 - waterHeight/2} L 390 ${250 - waterHeight/2}"
+                    stroke="white" stroke-width="3" fill="none" transform="translate(0, ${vibOffset})"/>
+                <path d="M 550 ${240 - waterHeight/2} L 600 ${240 - waterHeight/2} L 590 ${230 - waterHeight/2} M 600 ${240 - waterHeight/2} L 590 ${250 - waterHeight/2}"
+                    stroke="white" stroke-width="3" fill="none" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Expansion Joints -->
+                <rect x="248" y="195" width="${4 + (state.joint_gap || 20) * 0.2}" height="90" fill="#455A64" transform="translate(0, ${vibOffset})"/>
+                <rect x="448" y="195" width="${4 + (state.joint_gap || 20) * 0.2}" height="90" fill="#455A64" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Temperature indicators -->
+                ${(state.T_sun || 20) > 35 ? '<rect x="80" y="195" width="640" height="5" fill="#FF5722" opacity="0.7" transform="translate(0, ' + vibOffset + ')"/>' : ''}
+
+                <!-- Sensors -->
+                <circle cx="200" cy="195" r="8" fill="#4CAF50" transform="translate(0, ${vibOffset})"/>
+                <circle cx="400" cy="195" r="8" fill="#4CAF50" transform="translate(0, ${vibOffset})"/>
+                <circle cx="600" cy="195" r="8" fill="#4CAF50" transform="translate(0, ${vibOffset})"/>
+
+                <!-- Labels -->
+                <text x="115" y="180" fill="#333" font-size="12">入口</text>
+                <text x="680" y="180" fill="#333" font-size="12">出口</text>
+                <text x="380" y="310" fill="#333" font-size="14" font-weight="bold">团河渡槽</text>
+
+                <!-- Status indicators -->
+                ${vibration > 10 ? '<text x="380" y="150" fill="#F44336" font-size="18" font-weight="bold" text-anchor="middle">振动警告!</text>' : ''}
+                ${waterLevel > 6.5 ? '<text x="380" y="150" fill="#F44336" font-size="18" font-weight="bold" text-anchor="middle">高水位警告!</text>' : ''}
+            `;
+        }
+
+        // ========== Data Update ==========
+        async function updateData() {
+            try {
+                const res = await fetch('/api/state');
+                state = await res.json();
+
+                // Update header status
+                updateSystemStatus();
+
+                // Update gauges
+                updateGauge('gauge-h', state.h || 4, 0, 8);
+                updateGauge('gauge-v', state.v || 2, 0, 5);
+                updateGauge('gauge-fr', state.fr || 0.3, 0, 1.5);
+                updateGauge('gauge-gap', state.joint_gap || 20, 0, 50);
+
+                // Update values
+                document.getElementById('val-h').textContent = (state.h || 4).toFixed(2);
+                document.getElementById('val-v').textContent = (state.v || 2).toFixed(2);
+                document.getElementById('val-fr').textContent = (state.fr || 0.32).toFixed(2);
+                document.getElementById('val-gap').textContent = (state.joint_gap || 20).toFixed(1);
+                document.getElementById('val-Tsun').textContent = (state.T_sun || 20).toFixed(1);
+                document.getElementById('val-Tshade').textContent = (state.T_shade || 20).toFixed(1);
+                document.getElementById('val-vib').textContent = (state.vib_amp || 0).toFixed(1);
+                document.getElementById('val-bend').textContent = (state.bending_deflection || 0).toFixed(1);
+                document.getElementById('simTime').textContent = (state.time || 0).toFixed(1) + 's';
+
+                // Update monitoring table
+                updateMonitoringTable();
+
+                // Update charts
+                updateCharts();
+
+                // Update topology
+                drawTopology(state);
+
+                // Update active scenarios
+                updateActiveScenarios();
+
+                // Update safety panel
+                updateSafetyPanel();
+
+            } catch (error) {
+                console.error('Failed to fetch state:', error);
+            }
+        }
+
+        function updateSystemStatus() {
+            const dot = document.getElementById('systemStatusDot');
+            const text = document.getElementById('systemStatus');
+            const safetyLevel = document.getElementById('safetyLevel');
+
+            let status = 'normal';
+            let statusText = '系统正常';
+            let safetyClass = 'safety-normal';
+            let safetyText = '安全等级: 正常';
+
+            if (state.risks && state.risks.length > 0) {
+                const hasCritical = state.risks.some(r => r.includes('CRITICAL') || r.includes('紧急'));
+                if (hasCritical) {
+                    status = 'danger';
+                    statusText = '紧急状态';
+                    safetyClass = 'safety-danger';
+                    safetyText = '安全等级: 危险';
+                } else {
+                    status = 'warning';
+                    statusText = '警告状态';
+                    safetyClass = 'safety-warning';
+                    safetyText = '安全等级: 警告';
+                }
+            }
+
+            dot.className = 'status-dot ' + status;
+            text.textContent = statusText;
+            safetyLevel.className = 'safety-level ' + safetyClass;
+            safetyLevel.innerHTML = '<span style="font-size: 1.2em;">&#9679;</span><span>' + safetyText + '</span>';
+        }
+
+        function updateMonitoringTable() {
+            const updates = {
+                'mon-h': (state.h || 4).toFixed(2) + ' m',
+                'mon-v': (state.v || 2).toFixed(2) + ' m/s',
+                'mon-fr': (state.fr || 0.32).toFixed(2),
+                'mon-q': ((state.h || 4) * (state.v || 2) * 30).toFixed(0) + ' m³/s',
+                'mon-qin': (state.Q_in || 240).toFixed(0) + ' m³/s',
+                'mon-qout': (state.Q_out || 240).toFixed(0) + ' m³/s',
+                'mon-gap': (state.joint_gap || 20).toFixed(1) + ' mm',
+                'mon-bend': (state.bending_deflection || 0).toFixed(1) + ' mm',
+                'mon-vib': (state.vib_amp || 0).toFixed(1) + ' mm',
+                'mon-vibf': (state.vib_freq || 0).toFixed(1) + ' Hz',
+                'mon-bearing': state.bearing_locked ? '锁死' : '正常',
+                'mon-crack': (state.crack_width || 0).toFixed(2) + ' mm',
+                'mon-tsun': (state.T_sun || 20).toFixed(1) + ' °C',
+                'mon-tshade': (state.T_shade || 20).toFixed(1) + ' °C',
+                'mon-dt': ((state.T_sun || 20) - (state.T_shade || 20)).toFixed(1) + ' °C',
+                'mon-solar': (state.solar_rad || 0).toFixed(2) + ' kW/m²',
+                'mon-tamb': (state.T_amb || 20).toFixed(0) + ' °C',
+                'mon-ice': (state.ice_thickness || 0).toFixed(0) + ' mm'
+            };
+
+            for (const [id, value] of Object.entries(updates)) {
+                const el = document.getElementById(id);
+                if (el) el.textContent = value;
+            }
+        }
+
+        function updateCharts() {
+            const time = (state.time || 0).toFixed(1);
+            const maxPoints = 100;
+
+            // Temperature chart
+            if (charts.temp) {
+                charts.temp.data.labels.push(time);
+                charts.temp.data.datasets[0].data.push(state.T_sun || 20);
+                charts.temp.data.datasets[1].data.push(state.T_shade || 20);
+
+                if (charts.temp.data.labels.length > maxPoints) {
+                    charts.temp.data.labels.shift();
+                    charts.temp.data.datasets.forEach(ds => ds.data.shift());
+                }
+                charts.temp.update('none');
+            }
+
+            // Hydraulic chart
+            if (charts.hydraulic) {
+                charts.hydraulic.data.labels.push(time);
+                charts.hydraulic.data.datasets[0].data.push(state.h || 4);
+                charts.hydraulic.data.datasets[1].data.push(state.v || 2);
+
+                if (charts.hydraulic.data.labels.length > maxPoints) {
+                    charts.hydraulic.data.labels.shift();
+                    charts.hydraulic.data.datasets.forEach(ds => ds.data.shift());
+                }
+                charts.hydraulic.update('none');
+            }
+
+            // Multi-param chart
+            if (charts.multiParam) {
+                charts.multiParam.data.labels.push(time);
+                charts.multiParam.data.datasets[0].data.push(state.h || 4);
+                charts.multiParam.data.datasets[1].data.push(state.v || 2);
+                charts.multiParam.data.datasets[2].data.push(state.fr || 0.32);
+                charts.multiParam.data.datasets[3].data.push((state.joint_gap || 20) / 10);
+
+                if (charts.multiParam.data.labels.length > maxPoints) {
+                    charts.multiParam.data.labels.shift();
+                    charts.multiParam.data.datasets.forEach(ds => ds.data.shift());
+                }
+                charts.multiParam.update('none');
+            }
+        }
+
+        function updateActiveScenarios() {
+            const container = document.getElementById('activeScenarios');
+            if (!container) return;
+
+            const scenarios = state.active_scenarios || [];
+            if (scenarios.length === 0) {
+                container.innerHTML = `
+                    <div class="alert-panel alert-success">
+                        <span class="alert-icon">&#10003;</span>
+                        <div class="alert-content">
+                            <div class="alert-title">正常运行</div>
+                            <div class="alert-message">当前无活动场景</div>
+                        </div>
+                    </div>
+                `;
+            } else {
+                container.innerHTML = scenarios.map(s => `
+                    <div class="alert-panel alert-warning">
+                        <span class="alert-icon">&#9888;</span>
+                        <div class="alert-content">
+                            <div class="alert-title">${s}</div>
+                            <div class="alert-message">场景激活中</div>
+                        </div>
+                    </div>
+                `).join('');
+            }
+        }
+
+        function updateSafetyPanel() {
+            // Update safety percentages based on state
+            const hydraulicSafety = calculateHydraulicSafety();
+            const structuralSafety = calculateStructuralSafety();
+            const thermalSafety = calculateThermalSafety();
+
+            updateSafetyBar('hydraulic', hydraulicSafety);
+            updateSafetyBar('structural', structuralSafety);
+            updateSafetyBar('thermal', thermalSafety);
+
+            // Update overall safety
+            const overall = Math.min(hydraulicSafety, structuralSafety, thermalSafety);
+            const overallEl = document.getElementById('overallSafety');
+            if (overallEl) {
+                let safetyClass = 'safety-normal';
+                let safetyText = '正常';
+                if (overall < 50) { safetyClass = 'safety-danger'; safetyText = '危险'; }
+                else if (overall < 70) { safetyClass = 'safety-warning'; safetyText = '警告'; }
+                else if (overall < 90) { safetyClass = 'safety-caution'; safetyText = '注意'; }
+
+                overallEl.className = 'safety-level ' + safetyClass;
+                overallEl.innerHTML = `<span style="font-size: 1.5em;">&#9679;</span><span>整体安全等级: ${safetyText}</span>`;
+            }
+        }
+
+        function calculateHydraulicSafety() {
+            let safety = 100;
+            if (state.fr > 0.8) safety -= 40;
+            else if (state.fr > 0.6) safety -= 20;
+            if (state.h > 6.5) safety -= 30;
+            else if (state.h > 6) safety -= 15;
+            if (state.h < 2.5) safety -= 25;
+            return Math.max(0, safety);
+        }
+
+        function calculateStructuralSafety() {
+            let safety = 100;
+            if (state.vib_amp > 15) safety -= 50;
+            else if (state.vib_amp > 10) safety -= 30;
+            else if (state.vib_amp > 5) safety -= 15;
+            if (state.joint_gap < 5 || state.joint_gap > 35) safety -= 30;
+            if (state.bending_deflection > 50) safety -= 40;
+            else if (state.bending_deflection > 30) safety -= 20;
+            return Math.max(0, safety);
+        }
+
+        function calculateThermalSafety() {
+            let safety = 100;
+            const dt = Math.abs((state.T_sun || 20) - (state.T_shade || 20));
+            if (dt > 25) safety -= 40;
+            else if (dt > 20) safety -= 25;
+            else if (dt > 15) safety -= 10;
+            if ((state.T_sun || 20) > 50) safety -= 30;
+            return Math.max(0, safety);
+        }
+
+        function updateSafetyBar(type, value) {
+            const textEl = document.getElementById('safety-' + type);
+            const barEl = document.getElementById('bar-' + type);
+            if (textEl) textEl.textContent = value + '%';
+            if (barEl) {
+                barEl.style.width = value + '%';
+                if (value < 50) barEl.style.background = 'var(--danger)';
+                else if (value < 70) barEl.style.background = 'var(--warning)';
+                else barEl.style.background = 'var(--success)';
+            }
+        }
+
+        // ========== Actions ==========
+        async function injectScenario(scenarioId) {
+            try {
+                await fetch('/api/scenario', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ scenario_id: scenarioId })
+                });
+
+                // Update timeline
+                addTimelineEvent(scenarioId);
+
+            } catch (error) {
+                console.error('Failed to inject scenario:', error);
+            }
+        }
+
+        function addTimelineEvent(scenarioId) {
+            const timeline = document.getElementById('timelineContent');
+            if (!timeline) return;
+
+            const time = (state.time || 0).toFixed(1);
+            const isNormal = scenarioId === 'NORMAL';
+            const itemClass = isNormal ? 'success' : 'warning';
+
+            const item = document.createElement('div');
+            item.className = 'timeline-item ' + itemClass;
+            item.innerHTML = `
+                <div><strong>${scenarioId}</strong></div>
+                <div style="font-size: 0.85em; color: #666;">${time}s - ${isNormal ? '恢复正常' : '场景注入'}</div>
+            `;
+
+            timeline.insertBefore(item, timeline.firstChild);
+        }
+
+        async function triggerEmergency(action) {
+            if (!confirm('确定执行 ' + action + ' 操作?')) return;
+
+            try {
+                await fetch('/api/emergency', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ action: action })
+                });
+            } catch (error) {
+                console.error('Failed to trigger emergency:', error);
+            }
+        }
+
+        async function loadHistory() {
+            const minutes = parseInt(document.getElementById('historyRange').value);
+            try {
+                const res = await fetch(`/api/history?minutes=${minutes}`);
+                const data = await res.json();
+
+                if (charts.history && data.length > 0) {
+                    charts.history.data.labels = data.map(d => d.time.toFixed(1));
+                    charts.history.data.datasets = [
+                        { label: '水位', borderColor: '#1976d2', data: data.map(d => d.h), tension: 0.3 },
+                        { label: '流速', borderColor: '#4caf50', data: data.map(d => d.v), tension: 0.3 }
+                    ];
+                    charts.history.update();
+                }
+            } catch (error) {
+                console.error('Failed to load history:', error);
+            }
+        }
+
+        function exportHistory(format) {
+            const minutes = parseInt(document.getElementById('historyRange').value);
+            window.open(`/api/export?format=${format}&minutes=${minutes}`, '_blank');
+        }
+
+        function setChartRange(seconds) {
+            // Implement chart range change
+        }
+
+        function saveControlConfig() {
+            const config = {
+                target_h: parseFloat(document.getElementById('cfg-target-h').value),
+                target_v: parseFloat(document.getElementById('cfg-target-v').value),
+                kp: parseFloat(document.getElementById('cfg-kp').value),
+                ki: parseFloat(document.getElementById('cfg-ki').value)
+            };
+
+            fetch('/api/config/control', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            }).then(() => alert('控制参数已保存'));
+        }
+
+        function saveAlarmConfig() {
+            const config = {
+                h_high: parseFloat(document.getElementById('cfg-h-high').value),
+                h_low: parseFloat(document.getElementById('cfg-h-low').value),
+                dt_alarm: parseFloat(document.getElementById('cfg-dt-alarm').value),
+                vib_alarm: parseFloat(document.getElementById('cfg-vib-alarm').value)
+            };
+
+            fetch('/api/config/alarms', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(config)
+            }).then(() => alert('报警阈值已保存'));
+        }
+
+        // ========== Initialize ==========
+        document.addEventListener('DOMContentLoaded', () => {
+            initCharts();
+            updateData();
+            setInterval(updateData, updateInterval);
+        });
+    </script>
+</body>
+</html>

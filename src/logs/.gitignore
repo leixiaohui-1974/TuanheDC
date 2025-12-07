@@ -1,0 +1,8 @@
+# Ignore log files (generated at runtime)
+*.log
+*.log.*.gz
+*.db
+*.db-journal
+
+# Keep this directory
+!.gitignore
