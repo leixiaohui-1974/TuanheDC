@@ -1,4 +1,4 @@
-# Tuanhe Aqueduct Autonomous Operation System (TAOS) V3.8
+# Tuanhe Aqueduct Autonomous Operation System (TAOS) V3.9
 
 ## Overview
 This project implements a comprehensive **Autonomous Operation & Health Management System** for the Tuanhe Aqueduct (South-to-North Water Diversion Project). The system addresses "Wind-Water-Thermal-Structure" multi-physics coupling risks through intelligent perception, adaptive control, and comprehensive simulation.
@@ -24,11 +24,17 @@ This project implements a comprehensive **Autonomous Operation & Health Manageme
 - **Performance Monitoring**: Prometheus-compatible metrics
 - **Backup & Restore**: Automated backup scheduling with verification
 
-### V3.8 Distributed & Intelligent Features (NEW)
+### V3.8 Distributed & Intelligent Features
 - **Distributed Cluster**: Multi-node deployment with leader election and failover
 - **Edge Computing**: Edge device management, local processing, cloud sync
 - **Digital Twin**: High-fidelity 3D model with 75 components, virtual sensors
 - **AI/ML Control**: Deep learning prediction, reinforcement learning control
+
+### V3.9 Mobile & Visualization Enhancement (NEW)
+- **Mobile API**: Device registration, push notifications, QR codes, offline sync
+- **Advanced Visualization**: ECharts-compatible charts, GIS mapping, dashboard builder
+- **Internationalization (i18n)**: 10 languages, locale-aware formatting
+- **Blockchain Audit**: Immutable audit trail, data versioning, compliance reports
 
 ## System Architecture
 
@@ -52,6 +58,12 @@ src/
 │   ├── cluster.py             # Cluster management, leader election
 │   ├── edge_computing.py      # Edge device management
 │   └── digital_twin.py        # Digital twin 3D model
+│
+├── Mobile & Visualization (V3.9)
+│   ├── mobile_api.py          # Mobile device API
+│   ├── advanced_visualization.py  # Advanced charts & GIS
+│   ├── i18n.py                # Internationalization
+│   └── blockchain_audit.py    # Blockchain audit trail
 │
 ├── Enterprise Features
 │   ├── data_persistence.py    # SQLite time series storage
@@ -110,7 +122,41 @@ src/
 | `AnomalyDetector` | Autoencoder-based anomaly detection |
 | `ScenarioClassifier` | Multi-class scenario probability prediction |
 
-## API Endpoints (100+)
+## V3.9 New Modules
+
+### Mobile API (`mobile_api.py`)
+| Component | Description |
+|-----------|-------------|
+| `MobileDeviceManager` | Device registration, authentication, management |
+| `PushNotificationService` | APNs/FCM push notification support |
+| `QRCodeGenerator` | Device binding and data sharing QR codes |
+| `OfflineSyncManager` | Offline data storage with background sync |
+
+### Advanced Visualization (`advanced_visualization.py`)
+| Component | Description |
+|-----------|-------------|
+| `ChartDataGenerator` | ECharts-compatible line, gauge, heatmap, radar charts |
+| `GISVisualization` | Geographic mapping with aqueduct overlay |
+| `DashboardBuilder` | Custom dashboard creation with templates |
+| `3DVisualization` | ThreeJS-compatible 3D model data |
+
+### Internationalization (`i18n.py`)
+| Component | Description |
+|-----------|-------------|
+| `TranslationManager` | Key-value translation with fallback |
+| `LocaleManager` | 10 locales (zh-CN, en-US, ja-JP, ko-KR, etc.) |
+| `DateFormatter` | Locale-aware date/time formatting |
+| `NumberFormatter` | Locale-aware number/currency formatting |
+
+### Blockchain Audit (`blockchain_audit.py`)
+| Component | Description |
+|-----------|-------------|
+| `AuditChain` | Immutable blockchain with proof-of-work |
+| `DataVersionManager` | Entity version tracking with change history |
+| `MerkleTree` | Efficient verification of audit data |
+| `ComplianceReporter` | Access, change, security, control reports |
+
+## API Endpoints (150+)
 
 ### Core APIs
 | Endpoint | Method | Description |
@@ -161,6 +207,50 @@ src/
 | `/api/ml/rl` | GET | RL controller status |
 | `/api/ml/rl/action` | GET | Get RL action |
 
+### V3.9 Mobile APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/mobile` | GET | Mobile API status |
+| `/api/mobile/devices` | GET | List mobile devices |
+| `/api/mobile/register` | POST | Register device |
+| `/api/mobile/notifications` | POST | Send notification |
+| `/api/mobile/qr-code` | GET | Generate QR code |
+| `/api/mobile/sync/data` | POST | Sync device data |
+| `/api/mobile/dashboard` | GET | Mobile dashboard data |
+
+### V3.9 Visualization APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/viz` | GET | Visualization status |
+| `/api/viz/charts/<type>` | GET | Chart data by type |
+| `/api/viz/gis` | GET | GIS map data |
+| `/api/viz/gis/layers` | GET | Available map layers |
+| `/api/viz/dashboard-builder/dashboards` | GET/POST | Custom dashboards |
+| `/api/viz/3d-model` | GET | 3D model data |
+| `/api/viz/heatmap` | GET | Heatmap data |
+
+### V3.9 i18n APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/i18n` | GET | i18n status |
+| `/api/i18n/locales` | GET | Supported locales |
+| `/api/i18n/locale` | PUT | Set locale |
+| `/api/i18n/translate` | GET | Translate text |
+| `/api/i18n/translations/<locale>` | GET | All translations |
+| `/api/i18n/format/date` | GET | Format date |
+| `/api/i18n/format/number` | GET | Format number |
+
+### V3.9 Blockchain Audit APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/blockchain` | GET | Audit status |
+| `/api/blockchain/verify` | GET | Verify chain integrity |
+| `/api/blockchain/stats` | GET | Chain statistics |
+| `/api/blockchain/events` | GET | Query audit events |
+| `/api/blockchain/versions/<type>/<id>` | GET | Version history |
+| `/api/blockchain/reports/compliance` | GET | Compliance report |
+| `/api/blockchain/export` | GET | Export audit chain |
+
 ## Installation & Usage
 
 ### Requirements
@@ -193,19 +283,26 @@ cd src && python cluster.py
 cd src && python edge_computing.py
 cd src && python digital_twin.py
 cd src && python ml_control.py
+
+# Test V3.9 modules
+cd src && python mobile_api.py
+cd src && python advanced_visualization.py
+cd src && python i18n.py
+cd src && python blockchain_audit.py
 ```
 
 ## Module Statistics
 
 | Category | Count |
 |----------|-------|
-| Total Python Modules | 28 |
-| API Endpoints | 100+ |
+| Total Python Modules | 32 |
+| API Endpoints | 150+ |
 | Scenario Coverage | 1,778,880 |
 | Digital Twin Components | 75 |
 | Virtual Sensors | 20+ |
 | ML Models | 5 |
 | Edge Device Types | 6 |
+| Supported Languages | 10 |
 | Integration Tests | 29 |
 
 ## Version History
@@ -221,6 +318,7 @@ cd src && python ml_control.py
 | V3.6 | WebSocket, alerts, reports, authentication |
 | V3.7 | Docker, monitoring, backup/restore |
 | V3.8 | Distributed cluster, edge computing, digital twin, AI/ML |
+| V3.9 | Mobile API, advanced visualization, i18n, blockchain audit |
 
 ## License
 This project is part of the South-to-North Water Diversion Project infrastructure management system.

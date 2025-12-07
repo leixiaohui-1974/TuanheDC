@@ -1,4 +1,5 @@
 from flask import Flask, jsonify, request, render_template, Response, make_response
+import json
 import threading
 import time
 from collections import deque
@@ -27,6 +28,11 @@ from cluster import get_cluster, ClusterManager, NodeRole, NodeStatus, ServiceTy
 from edge_computing import get_edge_manager, EdgeDeviceManager, EdgeDeviceType, EdgeDeviceStatus
 from digital_twin import get_twin_manager, DigitalTwinManager, ModelResolution
 from ml_control import get_ml_manager, MLControlManager, ModelType
+# V3.9 新增模块 - 移动端与可视化增强
+from mobile_api import get_mobile_manager, MobileDeviceManager, NotificationType, MobilePlatform
+from advanced_visualization import get_viz_manager, AdvancedVisualizationManager, ChartType
+from i18n import get_i18n_manager, I18nManager, t as translate, SupportedLocale
+from blockchain_audit import get_audit_manager, BlockchainAuditManager, AuditEventType, AuditSeverity
 
 app = Flask(__name__)
 
@@ -59,6 +65,11 @@ cluster_manager = get_cluster()       # 集群管理
 edge_manager = get_edge_manager()     # 边缘计算
 twin_manager = get_twin_manager()     # 数字孪生
 ml_manager = get_ml_manager()         # ML控制
+# V3.9 新增模块
+mobile_manager = get_mobile_manager()   # 移动端API
+viz_manager = get_viz_manager()         # 高级可视化
+i18n_manager = get_i18n_manager()       # 国际化
+audit_manager = get_audit_manager()     # 区块链审计
 
 # 状态记录
 last_intelligence_result = {}         # 智能分析结果
@@ -1915,6 +1926,699 @@ def enable_ml_rl():
 
 
 # ============================================================
+# V3.9 新增API端点 - 移动端API
+# ============================================================
+
+@app.route('/api/mobile')
+def get_mobile_status():
+    """获取移动端API状态"""
+    try:
+        return jsonify(mobile_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/devices')
+def get_mobile_devices():
+    """获取已注册的移动设备列表"""
+    try:
+        devices = mobile_manager.get_all_devices()
+        return jsonify({
+            'count': len(devices),
+            'devices': [d.to_dict() for d in devices]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/devices/<device_id>')
+def get_mobile_device(device_id):
+    """获取指定移动设备信息"""
+    try:
+        device = mobile_manager.get_device(device_id)
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify(device.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/register', methods=['POST'])
+def register_mobile_device():
+    """注册移动设备"""
+    try:
+        data = request.json
+        if not data or 'device_id' not in data:
+            return jsonify({'error': 'device_id required'}), 400
+
+        device = mobile_manager.register_device(data)
+        audit_manager.log_data_create(
+            actor=data.get('user_id', 'anonymous'),
+            target=f"mobile_device:{device.device_id}",
+            data={'platform': data.get('platform', 'unknown')}
+        )
+        return jsonify(device.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/devices/<device_id>/push-token', methods=['PUT'])
+def update_push_token(device_id):
+    """更新推送令牌"""
+    try:
+        data = request.json
+        if not data or 'push_token' not in data:
+            return jsonify({'error': 'push_token required'}), 400
+
+        success = mobile_manager.update_push_token(device_id, data['push_token'])
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/notifications', methods=['POST'])
+def send_mobile_notification():
+    """发送推送通知"""
+    try:
+        data = request.json
+        if not data or 'title' not in data:
+            return jsonify({'error': 'title required'}), 400
+
+        result = mobile_manager.notification_service.send_notification(
+            device_id=data.get('device_id'),
+            title=data['title'],
+            body=data.get('body', ''),
+            notification_type=data.get('type', 'info'),
+            data=data.get('data', {})
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/notifications/broadcast', methods=['POST'])
+def broadcast_mobile_notification():
+    """广播推送通知"""
+    try:
+        data = request.json
+        if not data or 'title' not in data:
+            return jsonify({'error': 'title required'}), 400
+
+        result = mobile_manager.notification_service.broadcast(
+            title=data['title'],
+            body=data.get('body', ''),
+            notification_type=data.get('type', 'info')
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/qr-code')
+def get_mobile_qr_code():
+    """生成移动端绑定二维码"""
+    try:
+        user_id = request.args.get('user_id', 'default')
+        qr_data = mobile_manager.qr_generator.generate_device_binding_qr(user_id)
+        return jsonify(qr_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/sync/status')
+def get_mobile_sync_status():
+    """获取移动端同步状态"""
+    try:
+        return jsonify(mobile_manager.sync_manager.get_sync_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/sync/data', methods=['POST'])
+def sync_mobile_data():
+    """同步移动端数据"""
+    try:
+        data = request.json
+        if not data or 'device_id' not in data:
+            return jsonify({'error': 'device_id required'}), 400
+
+        result = mobile_manager.sync_manager.sync_device(
+            data['device_id'],
+            data.get('last_sync_time')
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/mobile/dashboard')
+def get_mobile_dashboard():
+    """获取移动端仪表盘数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        dashboard_data = mobile_manager.get_mobile_dashboard(state)
+        return jsonify(dashboard_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.9 新增API端点 - 高级可视化
+# ============================================================
+
+@app.route('/api/viz')
+def get_viz_status():
+    """获取可视化系统状态"""
+    try:
+        return jsonify(viz_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/charts/<chart_type>')
+def get_viz_chart(chart_type):
+    """获取指定类型的图表数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+            history = list(state_history)
+
+        chart_data = viz_manager.chart_generator.generate_chart(
+            chart_type, state, history
+        )
+        return jsonify(chart_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/gis')
+def get_viz_gis_data():
+    """获取GIS可视化数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        gis_data = viz_manager.gis_viz.get_gis_data(state)
+        return jsonify(gis_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/gis/layers')
+def get_viz_gis_layers():
+    """获取GIS图层列表"""
+    try:
+        return jsonify(viz_manager.gis_viz.get_available_layers())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/gis/layer/<layer_id>')
+def get_viz_gis_layer(layer_id):
+    """获取指定GIS图层数据"""
+    try:
+        layer_data = viz_manager.gis_viz.get_layer_data(layer_id)
+        if not layer_data:
+            return jsonify({'error': 'Layer not found'}), 404
+        return jsonify(layer_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder')
+def get_viz_dashboard_builder():
+    """获取仪表盘构建器状态"""
+    try:
+        return jsonify(viz_manager.dashboard_builder.get_builder_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/templates')
+def get_viz_dashboard_templates():
+    """获取仪表盘模板列表"""
+    try:
+        return jsonify(viz_manager.dashboard_builder.get_templates())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/dashboards')
+def get_viz_custom_dashboards():
+    """获取自定义仪表盘列表"""
+    try:
+        return jsonify(viz_manager.dashboard_builder.get_all_dashboards())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/dashboards', methods=['POST'])
+def create_viz_dashboard():
+    """创建自定义仪表盘"""
+    try:
+        data = request.json
+        if not data or 'name' not in data:
+            return jsonify({'error': 'name required'}), 400
+
+        dashboard = viz_manager.dashboard_builder.create_dashboard(data)
+        audit_manager.log_data_create(
+            actor=request.remote_addr,
+            target=f"dashboard:{dashboard['id']}",
+            data={'name': data['name']}
+        )
+        return jsonify(dashboard)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/dashboards/<dashboard_id>')
+def get_viz_dashboard_by_id(dashboard_id):
+    """获取指定仪表盘"""
+    try:
+        dashboard = viz_manager.dashboard_builder.get_dashboard(dashboard_id)
+        if not dashboard:
+            return jsonify({'error': 'Dashboard not found'}), 404
+        return jsonify(dashboard)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/dashboards/<dashboard_id>', methods=['PUT'])
+def update_viz_dashboard(dashboard_id):
+    """更新仪表盘"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        dashboard = viz_manager.dashboard_builder.update_dashboard(dashboard_id, data)
+        if not dashboard:
+            return jsonify({'error': 'Dashboard not found'}), 404
+
+        audit_manager.log_data_update(
+            actor=request.remote_addr,
+            target=f"dashboard:{dashboard_id}",
+            data={'changes': list(data.keys())}
+        )
+        return jsonify(dashboard)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/dashboard-builder/dashboards/<dashboard_id>', methods=['DELETE'])
+def delete_viz_dashboard(dashboard_id):
+    """删除仪表盘"""
+    try:
+        success = viz_manager.dashboard_builder.delete_dashboard(dashboard_id)
+        if not success:
+            return jsonify({'error': 'Dashboard not found'}), 404
+
+        audit_manager.log_data_delete(
+            actor=request.remote_addr,
+            target=f"dashboard:{dashboard_id}"
+        )
+        return jsonify({'success': True})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/3d-model')
+def get_viz_3d_model():
+    """获取3D模型数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        model_data = viz_manager.get_3d_visualization(state)
+        return jsonify(model_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/heatmap')
+def get_viz_heatmap():
+    """获取热力图数据"""
+    try:
+        variable = request.args.get('variable', 'h')
+        with sim_lock:
+            state = sim.get_state()
+            history = list(state_history)
+
+        heatmap_data = viz_manager.chart_generator.generate_heatmap(
+            variable, state, history
+        )
+        return jsonify(heatmap_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/viz/export/<format_type>')
+def export_viz_data(format_type):
+    """导出可视化数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+            history = list(state_history)
+
+        if format_type == 'svg':
+            svg_data = viz_manager.export_to_svg(state)
+            response = make_response(svg_data)
+            response.headers['Content-Type'] = 'image/svg+xml'
+            response.headers['Content-Disposition'] = 'attachment; filename=visualization.svg'
+            return response
+        elif format_type == 'json':
+            json_data = viz_manager.export_to_json(state, history)
+            response = make_response(json_data)
+            response.headers['Content-Type'] = 'application/json'
+            response.headers['Content-Disposition'] = 'attachment; filename=visualization.json'
+            return response
+        else:
+            return jsonify({'error': 'Unsupported format'}), 400
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.9 新增API端点 - 国际化
+# ============================================================
+
+@app.route('/api/i18n')
+def get_i18n_status():
+    """获取国际化状态"""
+    try:
+        return jsonify(i18n_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/locales')
+def get_i18n_locales():
+    """获取支持的语言列表"""
+    try:
+        return jsonify({
+            'locales': i18n_manager.get_supported_locales(),
+            'current': i18n_manager.get_locale()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/locale', methods=['PUT'])
+def set_i18n_locale():
+    """设置当前语言"""
+    try:
+        data = request.json
+        if not data or 'locale' not in data:
+            return jsonify({'error': 'locale required'}), 400
+
+        success = i18n_manager.set_locale(data['locale'])
+        if not success:
+            return jsonify({'error': 'Unsupported locale'}), 400
+        return jsonify({'status': 'ok', 'locale': data['locale']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/translate')
+def translate_text():
+    """翻译文本"""
+    try:
+        key = request.args.get('key')
+        locale = request.args.get('locale')
+
+        if not key:
+            return jsonify({'error': 'key required'}), 400
+
+        translation = i18n_manager.t(key, locale)
+        return jsonify({
+            'key': key,
+            'locale': locale or i18n_manager.get_locale(),
+            'translation': translation
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/translations/<locale>')
+def get_i18n_translations(locale):
+    """获取指定语言的所有翻译"""
+    try:
+        translations = i18n_manager.translation_manager.get_translations_for_locale(locale)
+        return jsonify({
+            'locale': locale,
+            'count': len(translations),
+            'translations': translations
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/translations', methods=['POST'])
+def add_i18n_translation():
+    """添加翻译"""
+    try:
+        data = request.json
+        if not data or 'key' not in data or 'locale' not in data or 'text' not in data:
+            return jsonify({'error': 'key, locale, and text required'}), 400
+
+        i18n_manager.add_translation(data['key'], data['locale'], data['text'])
+        audit_manager.log_data_create(
+            actor=request.remote_addr,
+            target=f"translation:{data['key']}:{data['locale']}"
+        )
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/export')
+def export_i18n():
+    """导出翻译"""
+    try:
+        locale = request.args.get('locale')
+        data = i18n_manager.export_all_translations()
+
+        response = make_response(json.dumps(data, ensure_ascii=False, indent=2))
+        response.headers['Content-Type'] = 'application/json; charset=utf-8'
+        response.headers['Content-Disposition'] = 'attachment; filename=translations.json'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/import', methods=['POST'])
+def import_i18n():
+    """导入翻译"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        i18n_manager.import_translations(data)
+        audit_manager.log_data_create(
+            actor=request.remote_addr,
+            target="translations",
+            data={'imported_keys': len(data.get('translations', {}))}
+        )
+        return jsonify({'status': 'ok'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/format/date')
+def format_i18n_date():
+    """格式化日期"""
+    try:
+        timestamp = request.args.get('timestamp')
+        locale = request.args.get('locale')
+        format_type = request.args.get('format', 'datetime')
+
+        if timestamp:
+            dt = datetime.fromisoformat(timestamp)
+        else:
+            dt = datetime.now()
+
+        formatted = i18n_manager.format_date(dt, locale, format_type)
+        return jsonify({
+            'timestamp': dt.isoformat(),
+            'locale': locale or i18n_manager.get_locale(),
+            'format_type': format_type,
+            'formatted': formatted
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/i18n/format/number')
+def format_i18n_number():
+    """格式化数字"""
+    try:
+        number = request.args.get('number', type=float)
+        locale = request.args.get('locale')
+        decimals = request.args.get('decimals', default=2, type=int)
+
+        if number is None:
+            return jsonify({'error': 'number required'}), 400
+
+        formatted = i18n_manager.format_number(number, locale, decimals)
+        return jsonify({
+            'number': number,
+            'locale': locale or i18n_manager.get_locale(),
+            'formatted': formatted
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.9 新增API端点 - 区块链审计
+# ============================================================
+
+@app.route('/api/blockchain')
+def get_blockchain_status():
+    """获取区块链审计状态"""
+    try:
+        return jsonify(audit_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/verify')
+def verify_blockchain():
+    """验证区块链完整性"""
+    try:
+        return jsonify(audit_manager.verify_chain())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/stats')
+def get_blockchain_stats():
+    """获取区块链统计"""
+    try:
+        return jsonify(audit_manager.get_chain_stats())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/events')
+def get_blockchain_events():
+    """查询审计事件"""
+    try:
+        actor = request.args.get('actor')
+        target = request.args.get('target')
+        event_type = request.args.get('event_type')
+        severity = request.args.get('severity')
+        limit = request.args.get('limit', default=100, type=int)
+
+        events = audit_manager.query_events(
+            actor=actor, target=target,
+            event_type=event_type, severity=severity, limit=limit
+        )
+        return jsonify({
+            'count': len(events),
+            'events': events
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/versions/<entity_type>/<entity_id>')
+def get_blockchain_version_history(entity_type, entity_id):
+    """获取实体版本历史"""
+    try:
+        history = audit_manager.get_version_history(entity_type, entity_id)
+        return jsonify({
+            'entity_type': entity_type,
+            'entity_id': entity_id,
+            'versions': history
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/versions/<entity_type>/<entity_id>/compare')
+def compare_blockchain_versions(entity_type, entity_id):
+    """比较实体版本"""
+    try:
+        v1 = request.args.get('v1', type=int)
+        v2 = request.args.get('v2', type=int)
+
+        if v1 is None or v2 is None:
+            return jsonify({'error': 'v1 and v2 required'}), 400
+
+        comparison = audit_manager.compare_versions(entity_type, entity_id, v1, v2)
+        return jsonify(comparison)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/reports/access')
+def get_blockchain_access_report():
+    """获取访问审计报告"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(audit_manager.generate_access_report(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/reports/change')
+def get_blockchain_change_report():
+    """获取变更审计报告"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(audit_manager.generate_change_report(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/reports/security')
+def get_blockchain_security_report():
+    """获取安全审计报告"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(audit_manager.generate_security_report(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/reports/control')
+def get_blockchain_control_report():
+    """获取控制审计报告"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(audit_manager.generate_control_report(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/reports/compliance')
+def get_blockchain_compliance_report():
+    """获取合规性报告"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        return jsonify(audit_manager.generate_compliance_summary(hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/blockchain/export')
+def export_blockchain():
+    """导出区块链数据"""
+    try:
+        chain_json = audit_manager.export_chain()
+        response = make_response(chain_json)
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Disposition'] = 'attachment; filename=audit_chain.json'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
 # 更新版本信息
 # ============================================================
 
@@ -1924,7 +2628,7 @@ def get_version():
     return jsonify({
         'name': 'TAOS - Tuanhe Aqueduct Autonomous Operation System',
         'name_cn': '团河渡槽自主运行系统',
-        'version': '3.8.0',
+        'version': '3.9.0',
         'build_date': '2025-12-07',
         'features': [
             '全场景自主运行',
@@ -1949,19 +2653,28 @@ def get_version():
             '分布式集群',
             '边缘计算',
             '数字孪生',
-            'AI/ML控制'
+            'AI/ML控制',
+            # V3.9
+            '移动端API',
+            '高级可视化',
+            '国际化支持',
+            '区块链审计'
         ],
         'modules': {
             'cluster': cluster_manager.get_cluster_status()['node_count'],
             'edge_devices': len(edge_manager.get_all_devices()),
             'twin_components': len(twin_manager.model.components),
-            'ml_models': len(ml_manager.predictor.models)
+            'ml_models': len(ml_manager.predictor.models),
+            'mobile_devices': len(mobile_manager.get_all_devices()),
+            'supported_locales': len(i18n_manager.get_supported_locales()),
+            'audit_blocks': len(audit_manager.audit_chain.chain)
         }
     })
 
 
 # 启动时记录日志
-log_info("TAOS V3.8 Server starting", category="system")
+log_info("TAOS V3.9 Server starting", category="system")
+audit_manager.log_system_event("start", {"version": "3.9.0"})
 
 
 if __name__ == '__main__':
@@ -1971,5 +2684,5 @@ if __name__ == '__main__':
     twin_manager.start()
     ml_manager.start()
 
-    log_info("TAOS V3.8 Server started on port 5000", category="system")
+    log_info("TAOS V3.9 Server started on port 5000", category="system")
     app.run(host='0.0.0.0', port=5000)
