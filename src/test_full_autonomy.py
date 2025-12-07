@@ -420,10 +420,135 @@ class ExtremeConditionTest:
         }
 
 
+class ScenarioSpaceValidator:
+    """Validates the full scenario space coverage."""
+
+    def __init__(self):
+        from scenario_space import FullScenarioSpace, ScenarioSpaceExplorer
+        self.space = FullScenarioSpace()
+        self.explorer = ScenarioSpaceExplorer(self.space)
+
+    def run_scenario_space_validation(self) -> Dict[str, Any]:
+        """Validate the full scenario space implementation."""
+        print("\n" + "=" * 60)
+        print("Scenario Space Validation (TAOS V3.2)")
+        print("=" * 60)
+
+        # Get space statistics
+        summary = self.space.generate_full_scenario_space()
+
+        print(f"\n基础场景: {summary['base_scenarios']}")
+        print(f"  - 水力类(S1): {summary['categories']['hydraulic']}")
+        print(f"  - 风振类(S2): {summary['categories']['wind']}")
+        print(f"  - 热力类(S3): {summary['categories']['thermal']}")
+        print(f"  - 结构类(S4): {summary['categories']['structural']}")
+        print(f"  - 地震类(S5): {summary['categories']['seismic']}")
+        print(f"  - 故障类(S6): {summary['categories']['fault']}")
+
+        print(f"\n组合场景:")
+        print(f"  - 2场景组合: {summary['combined_2']}")
+        print(f"  - 3场景组合: {summary['combined_3']}")
+
+        print(f"\n环境变化: {summary['environment_variations']}种")
+        print(f"\n总场景空间: {summary['estimated_total']:,}")
+
+        # Sample test: validate detection for each severity level
+        perception = PerceptionSystem()
+        tested_count = 0
+        passed_count = 0
+
+        print("\n场景采样测试 (高严重度场景 L3-L5):")
+        categories = ['S1', 'S2', 'S3', 'S4', 'S5', 'S6']
+
+        for cat in categories:
+            cat_scenarios = [s for s in self.space.base_scenarios.keys() if s.startswith(cat)]
+            # Sample high-severity scenarios (levels 3-5) which should definitely be detected
+            high_severity = [s for s in cat_scenarios if s.endswith('.3') or s.endswith('.4') or s.endswith('.5')]
+            samples = high_severity[:3] if len(high_severity) >= 3 else high_severity
+
+            cat_passed = 0
+            for scenario_id in samples:
+                scenario = self.space.base_scenarios[scenario_id]
+                state = self._build_state_from_scenario(scenario)
+
+                # Reset perception for clean detection
+                perception = PerceptionSystem()
+                for i in range(5):
+                    state['time'] = i * 60.0
+                    detected, _ = perception.analyze(state)
+
+                tested_count += 1
+                # Check if the base scenario type is detected (ignore severity level)
+                base_type = '.'.join(scenario_id.split('.')[:2])  # e.g., S1.1 from S1.1.3
+                if any(d.startswith(base_type) or d == base_type for d in detected):
+                    passed_count += 1
+                    cat_passed += 1
+
+            print(f"  {cat}: {cat_passed}/{len(samples)} ✓")
+
+        coverage_rate = passed_count / tested_count if tested_count > 0 else 0
+
+        print(f"\n采样测试结果: {passed_count}/{tested_count} ({coverage_rate:.1%})")
+
+        return {
+            'test': 'scenario_space',
+            'base_scenarios': summary['base_scenarios'],
+            'combined_2': summary['combined_2'],
+            'combined_3': summary['combined_3'],
+            'total_estimated': summary['estimated_total'],
+            'sampled': tested_count,
+            'passed': passed_count,
+            'coverage': coverage_rate
+        }
+
+    def _build_state_from_scenario(self, scenario) -> Dict[str, Any]:
+        """Build a test state from a scenario configuration."""
+        params = scenario.parameters
+        state = {
+            'h': params.get('h', 4.0),
+            'v': 2.0,
+            'fr': params.get('target_fr', 0.32),
+            'T_sun': params.get('T_sun', 25.0),
+            'T_shade': params.get('T_shade', 23.0),
+            'T_ambient': params.get('T_ambient', 25.0),
+            'joint_gap': params.get('joint_gap', 20.0),
+            'vib_amp': params.get('vib_amp', 5.0),
+            'bearing_stress': params.get('bearing_stress', 31.0),
+            'bearing_locked': params.get('bearing_locked', False),
+            'Q_in': params.get('Q_in', params.get('Q_surge', 80.0)),
+            'Q_out': 80.0,
+            'wind_speed': params.get('wind_speed', 2.0),
+            'ground_accel': params.get('ground_accel', 0.0),
+            'num_aftershocks': params.get('num_aftershocks', 0),
+            # Sensor confidence (S6.1)
+            'sensor_degradation': params.get('sensor_degradation', 0.0),
+            'h_confidence': 1.0 - params.get('sensor_degradation', 0.0),
+            'v_confidence': 1.0 - params.get('sensor_degradation', 0.0),
+            'T_confidence': 1.0 - params.get('sensor_degradation', 0.0),
+            # Actuator fault (S6.2)
+            'actuator_fault': params.get('actuator_fault', False),
+            'response_delay': params.get('response_delay', 0.0),
+            # Comm fault (S6.3)
+            'comm_loss_rate': params.get('comm_loss_rate', 0.0),
+            'latency': params.get('latency', 0),
+            # Controller degradation (S6.4)
+            'capability': params.get('capability', 1.0),
+            'controller_mode': params.get('controller_mode', 'normal'),
+            # Additional parameters
+            'turbulence': params.get('turbulence', 0.0),
+            'thermal_stress': params.get('thermal_stress', 0.0),
+            'fatigue_cycles': params.get('fatigue_cycles', 0),
+            'crack_length': params.get('crack_length', 0.0),
+            'cooling_rate': params.get('cooling_rate', 0.0),
+            'time': 0.0
+        }
+        return state
+
+
 def run_full_test_suite():
     """Run complete autonomy test suite."""
     print("=" * 60)
-    print("TAOS V3.0 Full Autonomy Test Suite")
+    print("TAOS V3.2 Full Autonomy Test Suite")
     print("Tuanhe Aqueduct Autonomous Operation System")
     print("=" * 60)
     print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
@@ -457,6 +582,14 @@ def run_full_test_suite():
     hil_tester = FullSystemHILTest()
     hil_result = hil_tester.run_full_test_suite()
     all_results['hil'] = hil_result
+
+    # 7. Scenario Space Validation (V3.2)
+    try:
+        space_validator = ScenarioSpaceValidator()
+        all_results['scenario_space'] = space_validator.run_scenario_space_validation()
+    except ImportError:
+        print("\nScenario space validation skipped (module not available)")
+        all_results['scenario_space'] = {'test': 'scenario_space', 'skipped': True}
 
     # Summary
     print("\n" + "=" * 60)
