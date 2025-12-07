@@ -80,6 +80,24 @@ class PerceptionSystem:
         self.sensor_confidence_history = []
         self.actuator_response_history = []
 
+        # Prediction integration
+        self.predicted_scenarios: Dict[str, float] = {}
+        self.plan_impacts: Dict[str, float] = {}
+        self.prediction_enabled = True
+
+    def update_predictions(self, scenario_probabilities: Dict[str, float],
+                           plan_impacts: Dict[str, float] = None):
+        """
+        Update with prediction information from external systems.
+
+        Args:
+            scenario_probabilities: Dict mapping scenario IDs to probabilities
+            plan_impacts: Dict with sensor/actuator availability impacts
+        """
+        self.predicted_scenarios = scenario_probabilities
+        if plan_impacts:
+            self.plan_impacts = plan_impacts
+
     def analyze(self, state: Dict[str, Any]) -> Tuple[List[str], List[str]]:
         """
         Analyzes the state to detect all 14+ scenarios and risks.
@@ -323,12 +341,102 @@ class PerceptionSystem:
         elif h > self.WATER_LEVEL_MAX:
             risks.append(f"WARNING: Water level critically high ({h:.2f} m)")
 
+        # ========== Prediction-Based Warnings ==========
+        if self.prediction_enabled and self.predicted_scenarios:
+            for scenario, prob in self.predicted_scenarios.items():
+                if prob >= 0.7 and scenario not in detected_scenarios:
+                    risks.append(f"FORECAST: High probability of {scenario} ({prob:.0%})")
+                elif prob >= 0.5 and scenario not in detected_scenarios:
+                    risks.append(f"ADVISORY: Elevated probability of {scenario} ({prob:.0%})")
+
+        # Plan impact warnings
+        if self.plan_impacts:
+            if self.plan_impacts.get('sensor_availability', 1.0) < 0.8:
+                risks.append(f"PLAN: Reduced sensor availability ({self.plan_impacts['sensor_availability']:.0%})")
+            if self.plan_impacts.get('actuator_availability', 1.0) < 0.8:
+                risks.append(f"PLAN: Reduced actuator availability ({self.plan_impacts['actuator_availability']:.0%})")
+
         # ========== NORMAL State Detection ==========
         # If no abnormal scenarios detected, system is in NORMAL state
         if len(detected_scenarios) == 0:
             detected_scenarios.append("NORMAL")
 
         return detected_scenarios, risks
+
+    def analyze_with_predictions(self, state: Dict[str, Any],
+                                  predictions: Dict[str, float] = None,
+                                  plan_impacts: Dict[str, float] = None) -> Tuple[List[str], List[str], Dict]:
+        """
+        Comprehensive analysis including predictions and plans.
+
+        Args:
+            state: Current system state
+            predictions: Scenario probability predictions
+            plan_impacts: Impacts from active plans
+
+        Returns:
+            Tuple of (detected_scenarios, risks, analysis_summary)
+        """
+        # Update predictions
+        if predictions:
+            self.update_predictions(predictions, plan_impacts)
+
+        # Run standard analysis
+        detected, risks = self.analyze(state)
+
+        # Build analysis summary
+        summary = {
+            'detected_scenarios': detected,
+            'risk_count': len(risks),
+            'predicted_scenarios': [
+                (s, p) for s, p in self.predicted_scenarios.items()
+                if p >= 0.3 and s != 'NORMAL'
+            ],
+            'plan_impacts': self.plan_impacts,
+            'combined_risk_level': self._calculate_combined_risk(detected, risks),
+            'proactive_recommendations': self._generate_recommendations(detected, predictions)
+        }
+
+        return detected, risks, summary
+
+    def _calculate_combined_risk(self, detected: List[str], risks: List[str]) -> str:
+        """Calculate combined risk considering detected and predicted scenarios."""
+        # Base risk from detection
+        base_risk = self.get_risk_level(risks)
+
+        # Elevate risk based on predictions
+        high_prob_count = sum(1 for s, p in self.predicted_scenarios.items()
+                              if p >= 0.6 and s != 'NORMAL')
+
+        if high_prob_count >= 2 or base_risk == RiskLevel.CRITICAL:
+            return "CRITICAL"
+        elif high_prob_count >= 1 or base_risk == RiskLevel.WARNING:
+            return "WARNING"
+        return "INFO"
+
+    def _generate_recommendations(self, detected: List[str],
+                                   predictions: Dict[str, float] = None) -> List[str]:
+        """Generate proactive recommendations based on analysis."""
+        recommendations = []
+
+        # Based on predictions
+        if predictions:
+            if predictions.get('S5.1', 0) >= 0.3:
+                recommendations.append("PRE-EMPTIVE: Lower water level in preparation for seismic risk")
+            if predictions.get('S3.1', 0) >= 0.5 or predictions.get('S3.2', 0) >= 0.5:
+                recommendations.append("PRE-EMPTIVE: Increase flow for thermal buffering")
+            if predictions.get('S1.2', 0) >= 0.4:
+                recommendations.append("PRE-EMPTIVE: Prepare for surge by adjusting downstream gate")
+            if predictions.get('S2.1', 0) >= 0.4:
+                recommendations.append("PRE-EMPTIVE: Increase water level for VIV damping")
+
+        # Based on plan impacts
+        if self.plan_impacts.get('sensor_availability', 1.0) < 0.8:
+            recommendations.append("MAINTENANCE: Enable conservative control mode during sensor maintenance")
+        if self.plan_impacts.get('actuator_availability', 1.0) < 0.8:
+            recommendations.append("MAINTENANCE: Reduce control aggressiveness during actuator maintenance")
+
+        return recommendations
 
     def get_risk_level(self, risks: List[str]) -> RiskLevel:
         """Determine overall risk level from risk messages."""

@@ -2,11 +2,16 @@ from flask import Flask, jsonify, request, render_template
 import threading
 import time
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timedelta
 from simulation import AqueductSimulation
 from control import AutonomousController, ControlMode, PerceptionSystem
 from mpc_controller import HybridController, AdaptiveMPC
 from scenario_generator import ScenarioGenerator
+from prediction_planning import (
+    PredictiveScenarioManager, WeatherForecast, FlowForecast,
+    SeismicAlert, MaintenancePlan, OperationSchedule,
+    PlanType, AlertLevel, ForecastSource
+)
 
 app = Flask(__name__)
 
@@ -22,12 +27,14 @@ perception = PerceptionSystem()      # 感知层
 mpc_controller = AdaptiveMPC()       # MPC控制层
 hybrid_controller = HybridController()  # 混合控制器
 scenario_gen = ScenarioGenerator()   # 场景生成器
+prediction_manager = PredictiveScenarioManager()  # 预测管理器
 
 simulation_running = True
 simulation_paused = False
 last_control_actions = {}
 last_perception_result = {}     # 场景识别结果
 last_mpc_state = {}             # MPC控制器状态
+last_prediction_state = {}      # 预测状态
 sim_lock = threading.Lock()
 state_history = deque(maxlen=HISTORY_MAX_SIZE)
 start_time = datetime.now()
@@ -470,6 +477,199 @@ def set_scenario():
             'status': 'ok',
             'scenario': scenario_id,
             'description': scenario_gen.scenarios[scenario_id].description
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prediction')
+def get_prediction():
+    """获取预测信息系统状态"""
+    try:
+        forecast = prediction_manager.get_scenario_forecast(24)
+        return jsonify(forecast)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prediction/weather', methods=['POST'])
+def update_weather_forecast():
+    """更新天气预报"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        forecast = WeatherForecast(
+            timestamp=datetime.now(),
+            valid_hours=data.get('valid_hours', 24),
+            T_max=data.get('T_max', 30.0),
+            T_min=data.get('T_min', 20.0),
+            T_trend=data.get('T_trend', 'stable'),
+            cooling_rate=data.get('cooling_rate', 0.0),
+            wind_speed_max=data.get('wind_speed_max', 5.0),
+            wind_direction=data.get('wind_direction', 'N'),
+            gust_speed=data.get('gust_speed', 10.0),
+            precipitation=data.get('precipitation', 0.0),
+            precipitation_prob=data.get('precipitation_prob', 0.0),
+            storm_warning=data.get('storm_warning', False),
+            solar_hours=data.get('solar_hours', 8.0),
+            confidence=data.get('confidence', 0.8)
+        )
+
+        prediction_manager.update_predictions(weather=forecast)
+
+        # Update perception system with predictions
+        with sim_lock:
+            perception.update_predictions(
+                prediction_manager.prediction.scenario_probabilities,
+                prediction_manager.planning.get_plan_impacts()
+            )
+
+        return jsonify({
+            'status': 'ok',
+            'forecast_summary': prediction_manager.prediction.get_forecast_summary()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prediction/flow', methods=['POST'])
+def update_flow_forecast():
+    """更新流量预报"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        forecast = FlowForecast(
+            timestamp=datetime.now(),
+            valid_hours=data.get('valid_hours', 24),
+            Q_upstream=data.get('Q_upstream', 80.0),
+            Q_upstream_max=data.get('Q_upstream_max', 100.0),
+            Q_upstream_min=data.get('Q_upstream_min', 60.0),
+            Q_downstream_demand=data.get('Q_downstream_demand', 80.0),
+            reservoir_release=data.get('reservoir_release', 0.0),
+            surge_probability=data.get('surge_probability', 0.0),
+            low_flow_risk=data.get('low_flow_risk', False),
+            confidence=data.get('confidence', 0.85)
+        )
+
+        prediction_manager.update_predictions(flow=forecast)
+
+        with sim_lock:
+            perception.update_predictions(
+                prediction_manager.prediction.scenario_probabilities,
+                prediction_manager.planning.get_plan_impacts()
+            )
+
+        return jsonify({
+            'status': 'ok',
+            'forecast_summary': prediction_manager.prediction.get_forecast_summary()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/prediction/seismic', methods=['POST'])
+def update_seismic_alert():
+    """更新地震预警"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        alert = SeismicAlert(
+            timestamp=datetime.now(),
+            alert_level=AlertLevel(data.get('alert_level', 1)),
+            magnitude=data.get('magnitude', 0.0),
+            epicenter_distance=data.get('epicenter_distance', 0.0),
+            estimated_arrival=data.get('estimated_arrival', 0.0),
+            expected_pga=data.get('expected_pga', 0.0),
+            expected_duration=data.get('expected_duration', 0.0),
+            aftershock_probability=data.get('aftershock_probability', 0.0),
+            recommended_action=data.get('recommended_action', 'MONITOR')
+        )
+
+        prediction_manager.update_predictions(seismic=alert)
+
+        with sim_lock:
+            perception.update_predictions(
+                prediction_manager.prediction.scenario_probabilities,
+                prediction_manager.planning.get_plan_impacts()
+            )
+
+        return jsonify({
+            'status': 'ok',
+            'alert': prediction_manager.prediction._alert_to_dict(alert),
+            'scenario_probabilities': prediction_manager.prediction.scenario_probabilities
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/planning/maintenance', methods=['POST'])
+def add_maintenance_plan():
+    """添加维护计划"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No JSON data provided'}), 400
+
+        now = datetime.now()
+        plan = MaintenancePlan(
+            plan_id=data.get('plan_id', f'M{int(now.timestamp())}'),
+            plan_type=PlanType(data.get('plan_type', 'maintenance')),
+            start_time=datetime.fromisoformat(data['start_time']) if 'start_time' in data else now,
+            end_time=datetime.fromisoformat(data['end_time']) if 'end_time' in data else now + timedelta(hours=2),
+            affected_systems=data.get('affected_systems', []),
+            affected_sensors=data.get('affected_sensors', []),
+            affected_actuators=data.get('affected_actuators', []),
+            sensor_availability=data.get('sensor_availability', 1.0),
+            actuator_availability=data.get('actuator_availability', 1.0),
+            control_capacity=data.get('control_capacity', 1.0),
+            description=data.get('description', '')
+        )
+
+        prediction_manager.planning.add_maintenance_plan(plan)
+
+        with sim_lock:
+            perception.update_predictions(
+                prediction_manager.prediction.scenario_probabilities,
+                prediction_manager.planning.get_plan_impacts()
+            )
+
+        return jsonify({
+            'status': 'ok',
+            'plan_id': plan.plan_id,
+            'plan_impacts': prediction_manager.planning.get_plan_impacts()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/planning')
+def get_planning():
+    """获取计划信息"""
+    try:
+        return jsonify({
+            'active_plans': prediction_manager.planning.get_active_plans(),
+            'upcoming_plans': prediction_manager.planning.get_upcoming_plans(48),
+            'plan_impacts': prediction_manager.planning.get_plan_impacts()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/recommendations')
+def get_recommendations():
+    """获取建议措施"""
+    try:
+        recommendations = prediction_manager.get_recommended_preparations()
+        return jsonify({
+            'recommendations': recommendations,
+            'scenario_probabilities': prediction_manager.prediction.scenario_probabilities,
+            'alerts': prediction_manager.get_scenario_forecast(24).get('alerts', [])
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
