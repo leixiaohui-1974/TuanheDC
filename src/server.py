@@ -12,6 +12,12 @@ from prediction_planning import (
     SeismicAlert, MaintenancePlan, OperationSchedule,
     PlanType, AlertLevel, ForecastSource
 )
+# 新增模块导入
+from data_persistence import get_persistence, DataAnalytics, AggregationType, ExportFormat
+from intelligence import get_intelligence
+from visualization import get_dashboard, DashboardLayout, SVGGenerator
+from safety import get_safety_manager, SafetyLevel
+from scada_interface import get_integration
 
 app = Flask(__name__)
 
@@ -29,6 +35,17 @@ hybrid_controller = HybridController()  # 混合控制器
 scenario_gen = ScenarioGenerator()   # 场景生成器
 prediction_manager = PredictiveScenarioManager()  # 预测管理器
 
+# 新增功能模块
+persistence = get_persistence()       # 数据持久化
+intelligence = get_intelligence()     # 智能化模块
+dashboard = get_dashboard()           # 可视化仪表盘
+safety_manager = get_safety_manager() # 安全管理
+integration = get_integration()       # 工程集成
+
+# 状态记录
+last_intelligence_result = {}         # 智能分析结果
+last_safety_result = {}               # 安全评估结果
+
 simulation_running = True
 simulation_paused = False
 last_control_actions = {}
@@ -44,8 +61,10 @@ def simulation_loop():
     """
     Background simulation loop with full agent hierarchy.
     分层智能体架构：感知层 -> 决策层 -> 执行层
+    集成：数据持久化、智能分析、安全监控、工程接口
     """
     global last_control_actions, last_perception_result, last_mpc_state
+    global last_intelligence_result, last_safety_result
     dt = SIMULATION_DT
 
     while simulation_running:
@@ -104,6 +123,21 @@ def simulation_loop():
                     'Q_out_cmd': actions.get('Q_out', 80.0)
                 }
                 state_history.append(history_entry)
+
+                # === 新增：数据持久化 ===
+                persistence.record_state(history_entry)
+
+                # === 新增：智能分析 ===
+                last_intelligence_result = intelligence.process_state(state)
+
+                # === 新增：安全监控 ===
+                last_safety_result = safety_manager.process_state(state)
+
+                # === 新增：可视化更新 ===
+                dashboard.update_history(state)
+
+                # === 新增：工程接口更新 ===
+                integration.update_all(state)
 
         time.sleep(SIMULATION_SLEEP)
 
@@ -670,6 +704,481 @@ def get_recommendations():
             'recommendations': recommendations,
             'scenario_probabilities': prediction_manager.prediction.scenario_probabilities,
             'alerts': prediction_manager.get_scenario_forecast(24).get('alerts', [])
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 新增API端点 - 数据持久化
+# ============================================================
+
+@app.route('/api/persistence/stats')
+def get_persistence_stats():
+    """获取数据库统计信息"""
+    try:
+        return jsonify(persistence.get_database_stats())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/persistence/history')
+def get_persistence_history():
+    """获取历史数据"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        aggregation = request.args.get('aggregation', default='raw', type=str)
+
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=hours)
+
+        agg_type = AggregationType(aggregation) if aggregation != 'raw' else AggregationType.RAW
+        data = persistence.query_state_history(start_time, end_time, agg_type, limit=1000)
+
+        return jsonify({
+            'count': len(data),
+            'start_time': start_time.isoformat(),
+            'end_time': end_time.isoformat(),
+            'aggregation': aggregation,
+            'data': data
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/persistence/statistics')
+def get_persistence_statistics():
+    """获取统计数据"""
+    try:
+        hours = request.args.get('hours', default=24, type=int)
+        end_time = datetime.now()
+        start_time = end_time - timedelta(hours=hours)
+
+        stats = persistence.get_statistics(start_time, end_time)
+
+        return jsonify({
+            'period_hours': hours,
+            'total_samples': stats.total_samples,
+            'water_level': {
+                'mean': stats.h_mean,
+                'std': stats.h_std,
+                'min': stats.h_min,
+                'max': stats.h_max
+            },
+            'froude': {
+                'mean': stats.fr_mean,
+                'max': stats.fr_max
+            },
+            'thermal': {
+                'delta_mean': stats.T_delta_mean,
+                'delta_max': stats.T_delta_max
+            },
+            'vibration': {
+                'mean': stats.vib_mean,
+                'max': stats.vib_max
+            },
+            'scenario_counts': stats.scenario_counts,
+            'risk_distribution': stats.risk_level_distribution,
+            'safe_operation_ratio': stats.safe_operation_ratio
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/persistence/alerts')
+def get_persistence_alerts():
+    """获取告警历史"""
+    try:
+        limit = request.args.get('limit', default=50, type=int)
+        unack = request.args.get('unacknowledged', default='false', type=str).lower() == 'true'
+        return jsonify(persistence.get_recent_alerts(limit, unack))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 新增API端点 - 智能分析
+# ============================================================
+
+@app.route('/api/intelligence')
+def get_intelligence_status():
+    """获取智能分析状态"""
+    try:
+        with sim_lock:
+            return jsonify({
+                'last_result': last_intelligence_result,
+                'summary': intelligence.get_summary()
+            })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/intelligence/predictions')
+def get_intelligence_predictions():
+    """获取预测结果"""
+    try:
+        variables = request.args.getlist('var') or ['h', 'fr', 'Q_in', 'Q_out']
+        horizon = request.args.get('horizon', default=5, type=int)
+
+        predictions = {}
+        for var in variables:
+            pred = intelligence.predictor.predict(var, horizon)
+            if pred:
+                predictions[var] = {
+                    'value': pred.value,
+                    'confidence': pred.confidence,
+                    'lower_bound': pred.lower_bound,
+                    'upper_bound': pred.upper_bound
+                }
+
+        return jsonify({
+            'horizon_minutes': horizon,
+            'predictions': predictions
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/intelligence/anomalies')
+def get_intelligence_anomalies():
+    """获取异常检测结果"""
+    try:
+        with sim_lock:
+            anomalies = last_intelligence_result.get('anomalies', [])
+        return jsonify({
+            'anomalies': anomalies,
+            'detector_summary': intelligence.anomaly_detector.get_anomaly_summary()
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/intelligence/patterns')
+def get_intelligence_patterns():
+    """获取模式识别结果"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+        patterns = intelligence.pattern_recognizer.recognize(state)
+        probabilities = intelligence.pattern_recognizer.get_pattern_probabilities(state)
+
+        return jsonify({
+            'matched_patterns': [p.pattern_id for p in patterns],
+            'pattern_probabilities': probabilities
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/intelligence/rl')
+def get_intelligence_rl():
+    """获取强化学习状态"""
+    try:
+        return jsonify({
+            'policy_stats': intelligence.rl_agent.get_policy_stats(),
+            'last_action': last_intelligence_result.get('rl_action')
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 新增API端点 - 可视化
+# ============================================================
+
+@app.route('/api/dashboard/gauges')
+def get_dashboard_gauges():
+    """获取仪表盘数据"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        gauges = {}
+        for var in ['h', 'fr', 'Q_in', 'Q_out', 'T_sun', 'T_shade', 'vib_amp', 'joint_gap']:
+            if var in state:
+                gauges[var] = dashboard.get_gauge_data(var, state[var])
+
+        # 添加温差
+        T_delta = abs(state.get('T_sun', 25) - state.get('T_shade', 25))
+        gauges['T_delta'] = dashboard.get_gauge_data('T_delta', T_delta)
+
+        return jsonify(gauges)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/charts')
+def get_dashboard_charts():
+    """获取图表数据"""
+    try:
+        variables = request.args.getlist('var') or ['h', 'Q_in', 'Q_out']
+        minutes = request.args.get('minutes', default=10, type=int)
+        return jsonify(dashboard.get_chart_data(variables, minutes))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/topology')
+def get_dashboard_topology():
+    """获取系统拓扑"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+        return jsonify(dashboard.get_system_topology(state))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/layout')
+def get_dashboard_layout():
+    """获取仪表盘布局配置"""
+    try:
+        layout_type = request.args.get('type', default='default', type=str)
+        if layout_type == 'monitoring':
+            return jsonify(DashboardLayout.get_monitoring_layout())
+        return jsonify(DashboardLayout.get_default_layout())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/alerts')
+def get_dashboard_alerts():
+    """获取可视化告警"""
+    try:
+        limit = request.args.get('limit', default=20, type=int)
+        return jsonify(dashboard.get_alerts(limit))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/dashboard/scenario-timeline')
+def get_scenario_timeline():
+    """获取场景时间线"""
+    try:
+        hours = request.args.get('hours', default=1, type=int)
+        with sim_lock:
+            history = list(state_history)
+        return jsonify(dashboard.get_scenario_timeline(history, hours))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 新增API端点 - 安全管理
+# ============================================================
+
+@app.route('/api/safety')
+def get_safety_status():
+    """获取安全状态"""
+    try:
+        return jsonify(safety_manager.get_safety_summary())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/faults')
+def get_safety_faults():
+    """获取故障信息"""
+    try:
+        active = safety_manager.fault_diagnosis.get_active_faults()
+        stats = safety_manager.fault_diagnosis.get_fault_statistics()
+
+        return jsonify({
+            'active_faults': [
+                {
+                    'id': f.fault_id,
+                    'type': f.fault_type.value,
+                    'severity': f.severity.name,
+                    'location': f.location,
+                    'description': f.description,
+                    'timestamp': f.timestamp.isoformat()
+                }
+                for f in active
+            ],
+            'statistics': stats
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/interlocks')
+def get_safety_interlocks():
+    """获取联锁状态"""
+    try:
+        return jsonify(safety_manager.interlocks.get_interlock_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/channels')
+def get_safety_channels():
+    """获取冗余通道状态"""
+    try:
+        return jsonify(safety_manager.redundant_control.get_channel_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/emergency')
+def get_safety_emergency():
+    """获取应急状态"""
+    try:
+        return jsonify(safety_manager.emergency.get_emergency_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/emergency/activate', methods=['POST'])
+def activate_emergency():
+    """激活应急响应"""
+    try:
+        data = request.json
+        if not data or 'type' not in data:
+            return jsonify({'error': 'Emergency type required'}), 400
+
+        result = safety_manager.emergency.activate_emergency(data['type'])
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/safety/emergency/deactivate', methods=['POST'])
+def deactivate_emergency():
+    """解除应急状态"""
+    try:
+        data = request.json or {}
+        reason = data.get('reason', 'resolved')
+        success = safety_manager.emergency.deactivate_emergency(reason)
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 新增API端点 - 工程集成
+# ============================================================
+
+@app.route('/api/scada')
+def get_scada_status():
+    """获取SCADA状态"""
+    try:
+        return jsonify(integration.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scada/values')
+def get_scada_values():
+    """获取SCADA数据点值"""
+    try:
+        return jsonify(integration.get_scada_values())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scada/alarms')
+def get_scada_alarms():
+    """获取SCADA告警"""
+    try:
+        return jsonify(integration.scada.get_active_alarms())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/scada/write', methods=['POST'])
+def write_scada_value():
+    """写入SCADA设定值"""
+    try:
+        data = request.json
+        if not data or 'parameter' not in data or 'value' not in data:
+            return jsonify({'error': 'Parameter and value required'}), 400
+
+        success = integration.write_setpoint(data['parameter'], float(data['value']))
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/opcua/nodes')
+def get_opcua_nodes():
+    """获取OPC-UA节点"""
+    try:
+        return jsonify(integration.get_opcua_nodes())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/opcua/read')
+def read_opcua_node():
+    """读取OPC-UA节点值"""
+    try:
+        node_id = request.args.get('node_id')
+        if not node_id:
+            return jsonify({'error': 'node_id required'}), 400
+
+        value, status = integration.opcua.read_value(node_id)
+        return jsonify({
+            'node_id': node_id,
+            'value': value,
+            'status_code': status
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/opcua/write', methods=['POST'])
+def write_opcua_node():
+    """写入OPC-UA节点值"""
+    try:
+        data = request.json
+        if not data or 'node_id' not in data or 'value' not in data:
+            return jsonify({'error': 'node_id and value required'}), 400
+
+        status = integration.opcua.write_value(data['node_id'], data['value'])
+        return jsonify({
+            'node_id': data['node_id'],
+            'status_code': status,
+            'success': status == 0
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 系统综合API
+# ============================================================
+
+@app.route('/api/system/full-status')
+def get_full_system_status():
+    """获取系统完整状态"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+            is_safe = sim.is_safe_state()
+
+        return jsonify({
+            'timestamp': datetime.now().isoformat(),
+            'uptime': (datetime.now() - start_time).total_seconds(),
+            'simulation': {
+                'running': simulation_running,
+                'paused': simulation_paused,
+                'time': state.get('time', 0)
+            },
+            'state': state,
+            'perception': last_perception_result,
+            'mpc': last_mpc_state,
+            'intelligence': {
+                'anomalies': last_intelligence_result.get('anomalies', []),
+                'patterns': last_intelligence_result.get('patterns', [])
+            },
+            'safety': {
+                'level': last_safety_result.get('safety_level', SafetyLevel.NORMAL).value
+                    if hasattr(last_safety_result.get('safety_level'), 'value')
+                    else str(last_safety_result.get('safety_level', 'NORMAL')),
+                'faults': last_safety_result.get('faults', []),
+                'interlocks': last_safety_result.get('interlocks_triggered', [])
+            },
+            'is_safe': is_safe
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500
