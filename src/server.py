@@ -22,6 +22,11 @@ from scada_interface import get_integration
 from config_manager import get_config
 from logging_system import get_logger, log_info, log_warning, log_error, audit
 from api_docs import get_generator, get_swagger_ui_html, get_redoc_html
+# V3.8 新增模块 - 分布式与智能化
+from cluster import get_cluster, ClusterManager, NodeRole, NodeStatus, ServiceType
+from edge_computing import get_edge_manager, EdgeDeviceManager, EdgeDeviceType, EdgeDeviceStatus
+from digital_twin import get_twin_manager, DigitalTwinManager, ModelResolution
+from ml_control import get_ml_manager, MLControlManager, ModelType
 
 app = Flask(__name__)
 
@@ -49,6 +54,11 @@ integration = get_integration()       # 工程集成
 config = get_config()                 # 配置管理
 logger = get_logger()                 # 日志系统
 api_generator = get_generator()       # API文档生成
+# V3.8 新增模块
+cluster_manager = get_cluster()       # 集群管理
+edge_manager = get_edge_manager()     # 边缘计算
+twin_manager = get_twin_manager()     # 数字孪生
+ml_manager = get_ml_manager()         # ML控制
 
 # 状态记录
 last_intelligence_result = {}         # 智能分析结果
@@ -147,6 +157,12 @@ def simulation_loop():
                 # === 新增：工程接口更新 ===
                 integration.update_all(state)
 
+                # === V3.8: 数字孪生同步 ===
+                twin_manager.update_from_real_time(state)
+
+                # === V3.8: ML控制处理 ===
+                ml_manager.process_state(state)
+
         time.sleep(SIMULATION_SLEEP)
 
 
@@ -209,32 +225,6 @@ def get_history():
             'total': len(state_history),
             'data': history
         })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/scenario', methods=['POST'])
-def set_scenario():
-    """Inject a scenario into the simulation."""
-    try:
-        data = request.json
-        if not data:
-            return jsonify({'error': 'No JSON data provided'}), 400
-
-        scenario_id = data.get('scenario_id')
-        if not scenario_id:
-            return jsonify({'error': 'scenario_id is required'}), 400
-
-        valid_scenarios = ['NORMAL', 'S1.1', 'S3.1', 'S3.3', 'S4.1', 'S5.1']
-        if scenario_id not in valid_scenarios:
-            return jsonify({
-                'error': f'Invalid scenario_id. Valid options: {valid_scenarios}'
-            }), 400
-
-        with sim_lock:
-            sim.inject_scenario(scenario_id)
-
-        return jsonify({'status': 'ok', 'scenario': scenario_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -1454,29 +1444,6 @@ def enhanced_dashboard():
     return render_template('dashboard.html')
 
 
-@app.route('/api/version')
-def get_version():
-    """获取系统版本信息"""
-    return jsonify({
-        'name': 'TAOS - Tuanhe Aqueduct Autonomous Operation System',
-        'name_cn': '团河渡槽自主运行系统',
-        'version': '3.5.0',
-        'build_date': '2025-12-07',
-        'features': [
-            '全场景自主运行',
-            '预测与规划',
-            '数据持久化',
-            '智能分析',
-            '可视化仪表盘',
-            '安全管理',
-            '工程集成',
-            '配置管理',
-            '日志审计',
-            'API文档'
-        ]
-    })
-
-
 @app.route('/api/metrics')
 def get_system_metrics():
     """获取系统性能指标"""
@@ -1519,10 +1486,490 @@ def get_system_metrics():
         return jsonify({'error': str(e)}), 500
 
 
+# ============================================================
+# V3.8 新增API端点 - 集群管理
+# ============================================================
+
+@app.route('/api/cluster')
+def get_cluster_status():
+    """获取集群状态"""
+    try:
+        return jsonify(cluster_manager.get_cluster_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/nodes')
+def get_cluster_nodes():
+    """获取集群节点列表"""
+    try:
+        nodes = [n.to_dict() for n in cluster_manager.nodes.values()]
+        return jsonify({
+            'count': len(nodes),
+            'nodes': nodes
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/nodes/<node_id>')
+def get_cluster_node(node_id):
+    """获取指定节点信息"""
+    try:
+        node = cluster_manager.nodes.get(node_id)
+        if not node:
+            return jsonify({'error': 'Node not found'}), 404
+        return jsonify(node.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/nodes/<node_id>/metrics')
+def get_cluster_node_metrics(node_id):
+    """获取节点指标"""
+    try:
+        return jsonify(cluster_manager.get_node_metrics(node_id))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/register', methods=['POST'])
+def register_cluster_node():
+    """注册新节点"""
+    try:
+        data = request.json
+        if not data or 'node_id' not in data:
+            return jsonify({'error': 'node_id required'}), 400
+
+        success = cluster_manager.register_node(data)
+        return jsonify({'success': success})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/load-balancer')
+def get_load_balancer_status():
+    """获取负载均衡状态"""
+    try:
+        return jsonify({
+            'strategy': cluster_manager.load_balancer.current_strategy,
+            'available_strategies': list(cluster_manager.load_balancer.strategies.keys())
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/cluster/load-balancer/strategy', methods=['POST'])
+def set_load_balancer_strategy():
+    """设置负载均衡策略"""
+    try:
+        data = request.json
+        if not data or 'strategy' not in data:
+            return jsonify({'error': 'strategy required'}), 400
+
+        cluster_manager.load_balancer.set_strategy(data['strategy'])
+        return jsonify({'status': 'ok', 'strategy': data['strategy']})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.8 新增API端点 - 边缘计算
+# ============================================================
+
+@app.route('/api/edge')
+def get_edge_status():
+    """获取边缘计算状态"""
+    try:
+        return jsonify(edge_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/devices')
+def get_edge_devices():
+    """获取边缘设备列表"""
+    try:
+        devices = [d.to_dict() for d in edge_manager.get_all_devices()]
+        return jsonify({
+            'count': len(devices),
+            'devices': devices
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/devices/<device_id>')
+def get_edge_device(device_id):
+    """获取指定边缘设备"""
+    try:
+        device = edge_manager.get_device(device_id)
+        if not device:
+            return jsonify({'error': 'Device not found'}), 404
+        return jsonify(device.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/devices/<device_id>/data', methods=['POST'])
+def process_edge_device_data(device_id):
+    """处理边缘设备数据"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+
+        result = edge_manager.process_device_data(device_id, data)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/devices/<device_id>/aggregated')
+def get_edge_device_aggregated(device_id):
+    """获取边缘设备聚合数据"""
+    try:
+        return jsonify(edge_manager.get_aggregated_data(device_id))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/devices/<device_id>/command', methods=['POST'])
+def send_edge_device_command(device_id):
+    """发送命令到边缘设备"""
+    try:
+        data = request.json
+        if not data or 'command' not in data:
+            return jsonify({'error': 'command required'}), 400
+
+        result = edge_manager.send_command_to_device(
+            device_id, data['command'], data.get('params', {})
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/register', methods=['POST'])
+def register_edge_device():
+    """注册新边缘设备"""
+    try:
+        data = request.json
+        if not data or 'device_id' not in data:
+            return jsonify({'error': 'device_id required'}), 400
+
+        device = edge_manager.register_device(data)
+        return jsonify(device.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/edge/sync')
+def get_edge_sync_status():
+    """获取边缘同步状态"""
+    try:
+        return jsonify(edge_manager.sync_manager.get_sync_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.8 新增API端点 - 数字孪生
+# ============================================================
+
+@app.route('/api/twin')
+def get_twin_status():
+    """获取数字孪生状态"""
+    try:
+        return jsonify(twin_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/model')
+def get_twin_model():
+    """获取数字孪生3D模型数据"""
+    try:
+        return jsonify(twin_manager.model.get_3d_model_data())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/components')
+def get_twin_components():
+    """获取数字孪生组件列表"""
+    try:
+        components = {cid: c.to_dict()
+                     for cid, c in twin_manager.model.components.items()}
+        return jsonify({
+            'count': len(components),
+            'components': components
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/components/<component_id>')
+def get_twin_component(component_id):
+    """获取指定组件"""
+    try:
+        comp = twin_manager.model.get_component(component_id)
+        if not comp:
+            return jsonify({'error': 'Component not found'}), 404
+        return jsonify(comp.to_dict())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/virtual-sensors')
+def get_twin_virtual_sensors():
+    """获取虚拟传感器"""
+    try:
+        sensors = {vid: v.to_dict()
+                  for vid, v in twin_manager.model.virtual_sensors.items()}
+        return jsonify({
+            'count': len(sensors),
+            'sensors': sensors
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/virtual-sensors/readings')
+def get_twin_virtual_sensor_readings():
+    """获取虚拟传感器读数"""
+    try:
+        return jsonify(twin_manager.model.get_virtual_sensor_readings())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/cross-section')
+def get_twin_cross_section():
+    """获取指定位置的断面数据"""
+    try:
+        chainage = request.args.get('chainage', default=500, type=float)
+        return jsonify(twin_manager.model.get_cross_section_at(chainage))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/state-history')
+def get_twin_state_history():
+    """获取数字孪生状态历史"""
+    try:
+        minutes = request.args.get('minutes', default=60, type=int)
+        return jsonify(twin_manager.model.get_state_history(minutes))
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/scenario', methods=['POST'])
+def run_twin_scenario():
+    """运行数字孪生场景分析"""
+    try:
+        data = request.json
+        if not data:
+            return jsonify({'error': 'Scenario data required'}), 400
+
+        name = data.get('name', f'scenario_{int(time.time())}')
+        scenario = data.get('scenario', {})
+        duration = data.get('duration', 300.0)
+
+        result = twin_manager.run_scenario_analysis(name, scenario, duration)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/scenarios')
+def get_twin_scenarios():
+    """获取保存的场景分析结果"""
+    try:
+        return jsonify(twin_manager.get_saved_scenarios())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/twin/export')
+def export_twin_model():
+    """导出数字孪生模型"""
+    try:
+        model_json = twin_manager.model.export_to_json()
+        response = make_response(model_json)
+        response.headers['Content-Type'] = 'application/json'
+        response.headers['Content-Disposition'] = 'attachment; filename=digital_twin.json'
+        return response
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# V3.8 新增API端点 - ML控制
+# ============================================================
+
+@app.route('/api/ml')
+def get_ml_status():
+    """获取ML控制状态"""
+    try:
+        return jsonify(ml_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/models')
+def get_ml_models():
+    """获取ML模型列表"""
+    try:
+        return jsonify(ml_manager.get_model_list())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/models/<model_id>')
+def get_ml_model(model_id):
+    """获取指定ML模型信息"""
+    try:
+        info = ml_manager.predictor.get_model_info(model_id)
+        return jsonify(info)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/predict/<model_id>')
+def get_ml_prediction(model_id):
+    """获取ML预测"""
+    try:
+        horizon = request.args.get('horizon', default=30, type=int)
+
+        with sim_lock:
+            state = sim.get_state()
+
+        pred = ml_manager.get_prediction(model_id, state, horizon)
+        if pred:
+            return jsonify(pred)
+        else:
+            return jsonify({'error': 'Prediction failed'}), 500
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/anomaly')
+def get_ml_anomaly():
+    """获取异常检测结果"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        anomaly = ml_manager.predictor.detect_anomaly(state)
+        return jsonify(anomaly)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/train', methods=['POST'])
+def train_ml_models():
+    """训练ML模型"""
+    try:
+        data = request.json or {}
+        epochs = data.get('epochs', 100)
+
+        results = ml_manager.train_models(epochs)
+        return jsonify(results)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/rl')
+def get_ml_rl_status():
+    """获取强化学习状态"""
+    try:
+        return jsonify(ml_manager.rl_controller.get_policy_info())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/rl/action')
+def get_ml_rl_action():
+    """获取RL建议的动作"""
+    try:
+        with sim_lock:
+            state = sim.get_state()
+
+        action = ml_manager.rl_controller.get_action(state, explore=False)
+        return jsonify(action)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/ml/rl/enable', methods=['POST'])
+def enable_ml_rl():
+    """启用/禁用RL控制"""
+    try:
+        data = request.json or {}
+        enable = data.get('enable', True)
+        ml_manager.enable_rl_control(enable)
+        return jsonify({'status': 'ok', 'rl_enabled': enable})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ============================================================
+# 更新版本信息
+# ============================================================
+
+@app.route('/api/version')
+def get_version():
+    """获取系统版本信息"""
+    return jsonify({
+        'name': 'TAOS - Tuanhe Aqueduct Autonomous Operation System',
+        'name_cn': '团河渡槽自主运行系统',
+        'version': '3.8.0',
+        'build_date': '2025-12-07',
+        'features': [
+            '全场景自主运行',
+            '预测与规划',
+            '数据持久化',
+            '智能分析',
+            '可视化仪表盘',
+            '安全管理',
+            '工程集成',
+            '配置管理',
+            '日志审计',
+            'API文档',
+            # V3.6-V3.7
+            'WebSocket实时通信',
+            '多渠道告警',
+            '自动报告生成',
+            '用户认证授权',
+            'Docker容器化',
+            '性能监控',
+            '备份恢复',
+            # V3.8
+            '分布式集群',
+            '边缘计算',
+            '数字孪生',
+            'AI/ML控制'
+        ],
+        'modules': {
+            'cluster': cluster_manager.get_cluster_status()['node_count'],
+            'edge_devices': len(edge_manager.get_all_devices()),
+            'twin_components': len(twin_manager.model.components),
+            'ml_models': len(ml_manager.predictor.models)
+        }
+    })
+
+
 # 启动时记录日志
-log_info("TAOS V3.5 Server starting", category="system")
+log_info("TAOS V3.8 Server starting", category="system")
 
 
 if __name__ == '__main__':
-    log_info("TAOS V3.5 Server started on port 5000", category="system")
+    # 启动V3.8模块
+    cluster_manager.start()
+    edge_manager.start()
+    twin_manager.start()
+    ml_manager.start()
+
+    log_info("TAOS V3.8 Server started on port 5000", category="system")
     app.run(host='0.0.0.0', port=5000)
