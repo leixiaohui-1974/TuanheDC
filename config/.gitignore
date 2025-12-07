@@ -1,0 +1,9 @@
+# Ignore runtime config files
+taos_config.yaml
+taos_config.json
+*.yaml
+*.yml
+*.json
+
+# Keep this directory
+!.gitignore
