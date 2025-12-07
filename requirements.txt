@@ -1,2 +1,23 @@
-flask
-numpy
+# TAOS - Tuanhe Aqueduct Autonomous Operation System
+# Python Dependencies
+
+# Web Framework
+flask>=2.3.0
+
+# YAML Configuration
+pyyaml>=6.0
+
+# Optional: WebSocket Support
+# flask-socketio>=5.3.0
+# python-socketio>=5.8.0
+
+# Optional: System Monitoring
+# psutil>=5.9.0
+
+# Optional: Advanced Features
+# numpy>=1.24.0
+# scipy>=1.10.0
+
+# Development
+# pytest>=7.3.0
+# pytest-cov>=4.0.0
