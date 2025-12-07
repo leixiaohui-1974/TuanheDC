@@ -59,14 +59,38 @@ class AdaptiveMPC:
         self.B = None  # Control input
         self.C = None  # Output
 
-        # Adaptive parameters
+        # Adaptive parameters - Full scenario coverage
         self.scenario_gains = {
-            'NORMAL': {'w_h': 10.0, 'w_fr': 5.0, 'w_T': 2.0},
-            'S1.1': {'w_h': 5.0, 'w_fr': 50.0, 'w_T': 1.0},    # Prioritize Fr
-            'S3.1': {'w_h': 5.0, 'w_fr': 5.0, 'w_T': 50.0},    # Prioritize thermal
-            'S3.3': {'w_h': 20.0, 'w_fr': 5.0, 'w_T': 2.0},    # Prioritize level
-            'S4.1': {'w_h': 15.0, 'w_fr': 3.0, 'w_T': 10.0},   # Balance
-            'S5.1': {'w_h': 30.0, 'w_fr': 10.0, 'w_T': 1.0},   # Emergency priority
+            # Normal operation
+            'NORMAL': {'w_h': 10.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 4.0},
+
+            # S1.x Hydraulic scenarios
+            'S1.1': {'w_h': 5.0, 'w_fr': 50.0, 'w_T': 1.0, 'target_h': 7.0},    # Prioritize Fr, raise level
+            'S1.2': {'w_h': 8.0, 'w_fr': 30.0, 'w_T': 1.0, 'target_h': 5.0},    # Surge attenuation
+
+            # S2.x Wind scenarios
+            'S2.1': {'w_h': 15.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 6.0},    # VIV damping, higher water
+
+            # S3.x Thermal scenarios
+            'S3.1': {'w_h': 5.0, 'w_fr': 5.0, 'w_T': 50.0, 'target_h': 4.0},    # Prioritize thermal
+            'S3.2': {'w_h': 12.0, 'w_fr': 5.0, 'w_T': 30.0, 'target_h': 5.5},   # Rapid cooling buffer
+            'S3.3': {'w_h': 20.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 3.0},    # Bearing lock, reduce load
+
+            # S4.x Joint scenarios
+            'S4.1': {'w_h': 15.0, 'w_fr': 3.0, 'w_T': 10.0, 'target_h': 5.0},   # Cold joint protection
+            'S4.2': {'w_h': 12.0, 'w_fr': 5.0, 'w_T': 15.0, 'target_h': 4.0},   # Hot joint cooling
+
+            # S5.x Seismic scenarios
+            'S5.1': {'w_h': 30.0, 'w_fr': 10.0, 'w_T': 1.0, 'target_h': 2.5},   # Emergency priority, low level
+            'S5.2': {'w_h': 25.0, 'w_fr': 8.0, 'w_T': 2.0, 'target_h': 3.5},    # Aftershock caution
+
+            # S6.x Fault scenarios
+            'S6.1': {'w_h': 8.0, 'w_fr': 4.0, 'w_T': 2.0, 'target_h': 4.0},     # Sensor fault, conservative
+            'S6.2': {'w_h': 5.0, 'w_fr': 3.0, 'w_T': 1.0, 'target_h': 4.0},     # Actuator fault, minimal control
+
+            # Combined scenarios
+            'MULTI_PHYSICS': {'w_h': 15.0, 'w_fr': 10.0, 'w_T': 10.0, 'target_h': 4.0},
+            'COMBINED_THERMAL_SEISMIC': {'w_h': 35.0, 'w_fr': 15.0, 'w_T': 5.0, 'target_h': 2.0},
         }
 
         # PID fallback controller
@@ -113,22 +137,40 @@ class AdaptiveMPC:
         self.C = np.eye(3)
 
     def _update_gains(self, scenarios: List[str]):
-        """Update MPC gains based on active scenarios."""
+        """Update MPC gains based on active scenarios with full coverage."""
         if not scenarios:
             gains = self.scenario_gains['NORMAL']
         else:
-            # Use highest priority scenario gains
-            priority = ['S5.1', 'S3.3', 'S1.1', 'S3.1', 'S4.1']
+            # Priority order: Emergency > Seismic > Thermal/Structural > Hydraulic > Faults
+            priority = [
+                'COMBINED_THERMAL_SEISMIC',  # Highest priority
+                'S5.1',   # Main seismic
+                'S5.2',   # Aftershock
+                'S3.3',   # Bearing lock
+                'S3.1',   # Thermal bending
+                'S3.2',   # Rapid cooling
+                'S1.1',   # Hydraulic jump
+                'S1.2',   # Surge wave
+                'S2.1',   # VIV
+                'S4.1',   # Joint expansion
+                'S4.2',   # Joint compression
+                'S6.1',   # Sensor fault
+                'S6.2',   # Actuator fault
+                'MULTI_PHYSICS',  # General multi-physics
+            ]
+            gains = None
             for s in priority:
                 if s in scenarios:
-                    gains = self.scenario_gains[s]
-                    break
-            else:
+                    gains = self.scenario_gains.get(s)
+                    if gains:
+                        break
+            if gains is None:
                 gains = self.scenario_gains['NORMAL']
 
         self.config.w_h = gains['w_h']
         self.config.w_fr = gains['w_fr']
         self.config.w_T_delta = gains['w_T']
+        self.config.h_target = gains.get('target_h', 4.0)
 
     def _build_qp_matrices(self, x0: np.ndarray, x_ref: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """
