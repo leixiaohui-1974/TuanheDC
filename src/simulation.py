@@ -188,3 +188,52 @@ class AqueductSimulation:
             self.solar_rad = 0.0
             self.T_sun = -10.0
             self.T_shade = -10.0
+
+    def reset(self):
+        """Reset simulation to initial safe state."""
+        # Water
+        self.h = 4.0
+        self.v = 2.0
+        self.T_water = 15.0
+        self.Q_in = 80.0
+        self.Q_out = 80.0
+
+        # Concrete
+        self.T_sun = 20.0
+        self.T_shade = 20.0
+        self.joint_gap = 20.0
+
+        # Vibration/Structure
+        self.vib_amp = 0.0
+        self.bearing_stress = 10.0
+
+        # Environment
+        self.T_ambient = 25.0
+        self.solar_rad = 0.0
+        self.wind_speed = 0.0
+        self.ground_accel = 0.0
+
+        # Flags
+        self.ice_plug = False
+        self.bearing_locked = False
+
+        self.time = 0.0
+
+    def get_froude_number(self):
+        """Alias for calculate_froude for clearer API."""
+        return self.calculate_froude()
+
+    def is_safe_state(self):
+        """Check if the system is in a safe operational state."""
+        fr = self.calculate_froude()
+        delta_T = abs(self.T_sun - self.T_shade)
+
+        return (
+            fr < 0.9 and
+            delta_T < 10.0 and
+            self.joint_gap > 5.0 and
+            self.joint_gap < 35.0 and
+            self.bearing_stress < 25.0 and
+            self.vib_amp < 50.0 and
+            not self.bearing_locked
+        )
