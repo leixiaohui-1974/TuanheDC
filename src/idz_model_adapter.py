@@ -382,15 +382,16 @@ class IDZModelAdapter:
         # IDZ model
         self.idz_model = IDZModel()
 
-        # Parameter estimator
-        num_params = len(self.idz_model.params.to_vector())
+        # Parameter estimator - use regressor dimension (9) instead of full params (18)
+        # The regressor has 9 features that map to key model behaviors
+        self.regressor_dim = 9
         self.estimator = RecursiveLeastSquares(
-            num_params,
+            self.regressor_dim,
             forgetting_factor=self.config.forgetting_factor
         )
 
-        # Initialize with nominal parameters
-        self.estimator.initialize(self.idz_model.params.to_vector())
+        # Initialize with ones (neutral scaling factors)
+        self.estimator.initialize(np.ones(self.regressor_dim))
 
         # Parameter bounds
         nominal = self.idz_model.params.to_vector()
@@ -518,6 +519,7 @@ class IDZModelAdapter:
         recent_hifi = list(self.hifi_buffer)[-10:]
 
         total_error = 0.0
+        update_count = 0
         for i in range(1, len(recent_hifi)):
             prev = recent_hifi[i - 1]
             curr = recent_hifi[i]
@@ -529,26 +531,34 @@ class IDZModelAdapter:
                 prev['environment']
             )
 
-            # Output is the state change
+            # Output is the state change magnitude
             dy = curr['state'] - prev['state']
+            y = np.mean(np.abs(dy))  # Use mean absolute change as target
 
-            # Update for each state variable
-            for j, y in enumerate(dy):
-                if len(phi) > 0:
-                    # Simplified: use first few parameters
-                    theta, error = self.estimator.update(phi[:self.estimator.n], y)
-                    total_error += error ** 2
+            # Update RLS estimator with regressor
+            if len(phi) == self.regressor_dim:
+                theta, error = self.estimator.update(phi, y)
+                total_error += error ** 2
+                update_count += 1
 
-        # Update IDZ model parameters (with bounds)
-        new_params = np.clip(
-            self.estimator.theta,
-            self.bounds.lower,
-            self.bounds.upper
-        )
+        # Map learned regressor weights back to model parameters
+        # Scale key parameters based on learned weights
+        old_params = self.idz_model.params.to_vector()
+        scaling = self.estimator.theta
+
+        # Apply scaling to key parameters (indices 0-8 map to regressor features)
+        new_params = old_params.copy()
+        param_indices = [1, 12, 7, 6, 9, 11, 11, 10, 11]  # Mapping to param vector
+        for i, idx in enumerate(param_indices):
+            if i < len(scaling) and idx < len(new_params):
+                scale_factor = 1.0 + (scaling[i] - 1.0) * 0.01  # Small adjustment
+                new_params[idx] *= np.clip(scale_factor, 0.9, 1.1)
+
+        # Apply bounds
+        new_params = np.clip(new_params, self.bounds.lower, self.bounds.upper)
 
         # Limit parameter change rate
-        old_params = self.idz_model.params.to_vector()
-        max_change = self.config.max_parameter_change * np.abs(old_params)
+        max_change = self.config.max_parameter_change * np.abs(old_params + 1e-10)
         param_change = np.clip(new_params - old_params, -max_change, max_change)
         new_params = old_params + param_change
 
@@ -558,14 +568,14 @@ class IDZModelAdapter:
         self.adaptation_history.append({
             'timestamp': time.time(),
             'method': 'rls',
-            'error': np.sqrt(total_error),
+            'error': np.sqrt(total_error) if update_count > 0 else 0,
             'param_change_norm': np.linalg.norm(param_change)
         })
 
         return {
             'adapted': True,
             'method': 'rls',
-            'rmse': np.sqrt(total_error / max(1, len(recent_hifi) - 1)),
+            'rmse': np.sqrt(total_error / max(1, update_count)),
             'param_change': param_change.tolist()
         }
 
@@ -628,21 +638,38 @@ class IDZModelAdapter:
         if len(self.hifi_buffer) < self.config.min_samples:
             return {'adapted': False, 'reason': 'insufficient_data'}
 
-        # Use RLS covariance as approximate posterior
+        # Get base parameters
+        base_params = self.idz_model.params.to_vector()
+
+        # Use RLS covariance as approximate posterior for regressor weights
         theta = self.estimator.theta
         P = self.estimator.P
 
-        # Sample from posterior
+        # Sample from posterior (9-dimensional regressor space)
         num_samples = 20
         samples = np.random.multivariate_normal(theta, P, num_samples)
 
-        # Evaluate each sample
-        best_params = theta.copy()
+        # Evaluate each sample by mapping to full parameters
+        best_scaling = theta.copy()
         best_error = np.inf
+        param_indices = [1, 12, 7, 6, 9, 11, 11, 10, 11]  # Same mapping as RLS
 
         for sample in samples:
-            sample = np.clip(sample, self.bounds.lower, self.bounds.upper)
-            temp_model = IDZModel(IDZModelParameters.from_vector(sample))
+            # Clip regressor weights
+            sample = np.clip(sample, 0.1, 10.0)
+
+            # Map to full parameters
+            test_params = base_params.copy()
+            for i, idx in enumerate(param_indices):
+                if i < len(sample) and idx < len(test_params):
+                    scale_factor = 1.0 + (sample[i] - 1.0) * 0.01
+                    test_params[idx] *= np.clip(scale_factor, 0.9, 1.1)
+
+            # Clip to bounds
+            test_params = np.clip(test_params, self.bounds.lower, self.bounds.upper)
+
+            # Evaluate with temporary model
+            temp_model = IDZModel(IDZModelParameters.from_vector(test_params))
 
             total_error = 0.0
             for data in list(self.hifi_buffer)[-10:]:
@@ -652,12 +679,21 @@ class IDZModelAdapter:
 
             if total_error < best_error:
                 best_error = total_error
-                best_params = sample.copy()
+                best_scaling = sample.copy()
 
-        # Update model
+        # Apply best scaling to model parameters
         old_params = self.idz_model.params.to_vector()
-        max_change = self.config.max_parameter_change * np.abs(old_params)
-        param_change = np.clip(best_params - old_params, -max_change, max_change)
+        new_params = old_params.copy()
+        for i, idx in enumerate(param_indices):
+            if i < len(best_scaling) and idx < len(new_params):
+                scale_factor = 1.0 + (best_scaling[i] - 1.0) * 0.01
+                new_params[idx] *= np.clip(scale_factor, 0.9, 1.1)
+
+        new_params = np.clip(new_params, self.bounds.lower, self.bounds.upper)
+
+        # Limit parameter change rate
+        max_change = self.config.max_parameter_change * np.abs(old_params + 1e-10)
+        param_change = np.clip(new_params - old_params, -max_change, max_change)
         new_params = old_params + param_change
 
         self.idz_model.params = IDZModelParameters.from_vector(new_params)
