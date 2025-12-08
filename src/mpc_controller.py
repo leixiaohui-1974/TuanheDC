@@ -1,562 +1,541 @@
 """
-Adaptive Model Predictive Controller (MPC) for TAOS
+TAOS V3.10 Model Predictive Control (MPC) Module
+模型预测控制模块
 
-This module implements:
-- Linear MPC with quadratic cost
-- Adaptive gain scheduling based on scenarios
-- Constraint handling (flow limits, rate limits)
-- Prediction horizon optimization
-- Fallback to PID when MPC fails
+Features:
+- Linear and nonlinear MPC implementation
+- Multi-variable control with constraints
+- Receding horizon optimization
+- Disturbance rejection
+- Reference tracking
+- Economic MPC for cost optimization
 """
 
 import numpy as np
-from typing import Dict, List, Tuple, Optional, Any
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from typing import Dict, List, Optional, Any, Callable, Tuple
 from enum import Enum
+import logging
+import threading
+import time
+from abc import ABC, abstractmethod
+from scipy.optimize import minimize
+from scipy.linalg import solve_discrete_are
+
+logger = logging.getLogger(__name__)
+
+
+class MPCType(Enum):
+    """MPC controller types"""
+    LINEAR = "linear"
+    NONLINEAR = "nonlinear"
+    ECONOMIC = "economic"
+    ROBUST = "robust"
+
+
+class SolverType(Enum):
+    """Optimization solver types"""
+    QP = "qp"
+    SLSQP = "slsqp"
+    IPOPT = "ipopt"
+    SQPMETHOD = "sqp"
 
 
 @dataclass
 class MPCConfig:
-    """MPC controller configuration."""
-    prediction_horizon: int = 10     # Np: prediction steps
-    control_horizon: int = 5         # Nc: control steps
-    dt: float = 0.5                  # Sample time (seconds)
+    """MPC controller configuration"""
+    prediction_horizon: int = 20
+    control_horizon: int = 10
+    sample_time: float = 1.0
+    n_states: int = 4
+    n_inputs: int = 2
+    n_outputs: int = 2
+    Q: Optional[np.ndarray] = None
+    R: Optional[np.ndarray] = None
+    S: Optional[np.ndarray] = None
+    u_min: Optional[np.ndarray] = None
+    u_max: Optional[np.ndarray] = None
+    du_min: Optional[np.ndarray] = None
+    du_max: Optional[np.ndarray] = None
+    y_min: Optional[np.ndarray] = None
+    y_max: Optional[np.ndarray] = None
+    solver: SolverType = SolverType.SLSQP
+    max_iterations: int = 100
+    tolerance: float = 1e-6
+    use_terminal_constraint: bool = False
+    use_terminal_cost: bool = True
 
-    # State weights (Q matrix diagonal)
-    w_h: float = 10.0               # Water level weight
-    w_v: float = 1.0                # Velocity weight
-    w_fr: float = 5.0               # Froude number weight
-    w_T_delta: float = 2.0          # Thermal differential weight
-
-    # Control weights (R matrix diagonal)
-    w_Q_in: float = 0.1             # Inlet flow weight
-    w_Q_out: float = 0.1            # Outlet flow weight
-    w_dQ_in: float = 1.0            # Inlet rate change weight
-    w_dQ_out: float = 1.0           # Outlet rate change weight
-
-    # Constraints
-    Q_min: float = 0.0
-    Q_max: float = 200.0
-    dQ_max: float = 20.0            # Max rate of change per step
-
-    # Targets
-    h_target: float = 4.0
-    v_target: float = 2.0
-    fr_target: float = 0.32
+    def __post_init__(self):
+        if self.Q is None:
+            self.Q = np.eye(self.n_outputs)
+        if self.R is None:
+            self.R = 0.1 * np.eye(self.n_inputs)
+        if self.S is None:
+            self.S = 0.01 * np.eye(self.n_inputs)
 
 
-class AdaptiveMPC:
-    """
-    Adaptive Model Predictive Controller with scenario-based gain scheduling.
-    """
+@dataclass
+class MPCResult:
+    """MPC optimization result"""
+    optimal_control: np.ndarray
+    predicted_states: np.ndarray
+    predicted_outputs: np.ndarray
+    cost: float
+    success: bool
+    iterations: int
+    solve_time: float
+    active_constraints: List[str] = field(default_factory=list)
 
-    def __init__(self, config: Optional[MPCConfig] = None):
-        self.config = config or MPCConfig()
-        self.last_u = np.array([80.0, 80.0])  # [Q_in, Q_out]
 
-        # System model parameters (linearized around operating point)
-        self.A = None  # State transition
-        self.B = None  # Control input
-        self.C = None  # Output
+class SystemModel(ABC):
+    """Abstract base class for system models"""
 
-        # Adaptive parameters - Full scenario coverage
-        self.scenario_gains = {
-            # Normal operation
-            'NORMAL': {'w_h': 10.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 4.0},
+    @abstractmethod
+    def predict(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        pass
 
-            # S1.x Hydraulic scenarios
-            'S1.1': {'w_h': 5.0, 'w_fr': 50.0, 'w_T': 1.0, 'target_h': 7.0},    # Prioritize Fr, raise level
-            'S1.2': {'w_h': 8.0, 'w_fr': 30.0, 'w_T': 1.0, 'target_h': 5.0},    # Surge attenuation
+    @abstractmethod
+    def output(self, x: np.ndarray) -> np.ndarray:
+        pass
 
-            # S2.x Wind scenarios
-            'S2.1': {'w_h': 15.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 6.0},    # VIV damping, higher water
+    @abstractmethod
+    def get_linearization(self, x: np.ndarray, u: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        pass
 
-            # S3.x Thermal scenarios
-            'S3.1': {'w_h': 5.0, 'w_fr': 5.0, 'w_T': 50.0, 'target_h': 4.0},    # Prioritize thermal
-            'S3.2': {'w_h': 12.0, 'w_fr': 5.0, 'w_T': 30.0, 'target_h': 5.5},   # Rapid cooling buffer
-            'S3.3': {'w_h': 20.0, 'w_fr': 5.0, 'w_T': 2.0, 'target_h': 3.0},    # Bearing lock, reduce load
 
-            # S4.x Joint scenarios
-            'S4.1': {'w_h': 15.0, 'w_fr': 3.0, 'w_T': 10.0, 'target_h': 5.0},   # Cold joint protection
-            'S4.2': {'w_h': 12.0, 'w_fr': 5.0, 'w_T': 15.0, 'target_h': 4.0},   # Hot joint cooling
+class LinearStateSpaceModel(SystemModel):
+    """Discrete-time linear state-space model"""
 
-            # S5.x Seismic scenarios
-            'S5.1': {'w_h': 30.0, 'w_fr': 10.0, 'w_T': 1.0, 'target_h': 2.5},   # Emergency priority, low level
-            'S5.2': {'w_h': 25.0, 'w_fr': 8.0, 'w_T': 2.0, 'target_h': 3.5},    # Aftershock caution
+    def __init__(self, A: np.ndarray, B: np.ndarray,
+                 C: np.ndarray, D: Optional[np.ndarray] = None):
+        self.A = np.array(A)
+        self.B = np.array(B)
+        self.C = np.array(C)
+        self.D = np.array(D) if D is not None else np.zeros((C.shape[0], B.shape[1]))
+        self.n_states = A.shape[0]
+        self.n_inputs = B.shape[1]
+        self.n_outputs = C.shape[0]
 
-            # S6.x Fault scenarios
-            'S6.1': {'w_h': 8.0, 'w_fr': 4.0, 'w_T': 2.0, 'target_h': 4.0},     # Sensor fault, conservative
-            'S6.2': {'w_h': 5.0, 'w_fr': 3.0, 'w_T': 1.0, 'target_h': 4.0},     # Actuator fault, minimal control
+    def predict(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        return self.A @ x + self.B @ u
 
-            # Combined scenarios
-            'MULTI_PHYSICS': {'w_h': 15.0, 'w_fr': 10.0, 'w_T': 10.0, 'target_h': 4.0},
-            'COMBINED_THERMAL_SEISMIC': {'w_h': 35.0, 'w_fr': 15.0, 'w_T': 5.0, 'target_h': 2.0},
+    def output(self, x: np.ndarray, u: Optional[np.ndarray] = None) -> np.ndarray:
+        if u is None:
+            u = np.zeros(self.n_inputs)
+        return self.C @ x + self.D @ u
+
+    def get_linearization(self, x: np.ndarray, u: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+        return self.A, self.B
+
+
+class NonlinearModel(SystemModel):
+    """Nonlinear system model with user-defined dynamics"""
+
+    def __init__(self, f: Callable, h: Callable,
+                 n_states: int, n_inputs: int, n_outputs: int,
+                 sample_time: float = 1.0):
+        self.f = f
+        self.h = h
+        self.n_states = n_states
+        self.n_inputs = n_inputs
+        self.n_outputs = n_outputs
+        self.sample_time = sample_time
+
+    def predict(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        return self.f(x, u)
+
+    def output(self, x: np.ndarray) -> np.ndarray:
+        return self.h(x)
+
+    def get_linearization(self, x: np.ndarray, u: np.ndarray,
+                          eps: float = 1e-6) -> Tuple[np.ndarray, np.ndarray]:
+        A = np.zeros((self.n_states, self.n_states))
+        B = np.zeros((self.n_states, self.n_inputs))
+        f0 = self.f(x, u)
+        for i in range(self.n_states):
+            x_plus = x.copy()
+            x_plus[i] += eps
+            A[:, i] = (self.f(x_plus, u) - f0) / eps
+        for i in range(self.n_inputs):
+            u_plus = u.copy()
+            u_plus[i] += eps
+            B[:, i] = (self.f(x, u_plus) - f0) / eps
+        return A, B
+
+
+class AqueductModel(SystemModel):
+    """Water aqueduct system model for TAOS"""
+
+    def __init__(self, channel_params: Dict[str, float] = None):
+        self.params = channel_params or {
+            'length': 1000.0,
+            'width': 5.0,
+            'slope': 0.0001,
+            'manning_n': 0.015,
+            'gravity': 9.81,
+            'gate_coeff': 0.6,
         }
+        self.n_states = 4
+        self.n_inputs = 2
+        self.n_outputs = 2
+        self.sample_time = 60.0
 
-        # PID fallback controller
-        self.pid_kp = 10.0
-        self.pid_ki = 0.5
-        self.pid_kd = 2.0
-        self.pid_integral = 0.0
-        self.pid_last_error = 0.0
-
-        # Performance tracking
-        self.solve_count = 0
-        self.fallback_count = 0
-
-        # Initialize model
-        self._build_model()
-
-    def _build_model(self):
-        """Build linearized system model."""
-        # Simplified model:
-        # State: [h, v, T_delta]
-        # Input: [Q_in, Q_out]
-        # Dynamics: dh/dt = (Q_in - Q_out) / A
-        #           dv/dt = (Q - Q_prev) / (2*A*h) (simplified)
-        #           dT/dt = -k * v * T (cooling effect)
-
-        dt = self.config.dt
-        A_cross = 400.0  # m² (Width * Length)
-
-        # State transition matrix (discrete)
-        self.A = np.array([
-            [1.0, 0.0, 0.0],
-            [0.0, 0.9, 0.0],
-            [0.0, -0.01, 0.98]
+    def predict(self, x: np.ndarray, u: np.ndarray) -> np.ndarray:
+        h1, h2, q1, q2 = x
+        g1, g2 = np.clip(u, 0, 1)
+        p = self.params
+        dt = self.sample_time
+        g_coeff = p['gate_coeff']
+        gravity = p['gravity']
+        q_gate1 = g_coeff * g1 * p['width'] * np.sqrt(2 * gravity * max(h1, 0.01)) if h1 > 0 else 0
+        q_gate2 = g_coeff * g2 * p['width'] * np.sqrt(2 * gravity * max(h2, 0.01)) if h2 > 0 else 0
+        area = p['width'] * p['length'] / 2
+        dh1_dt = (q1 - q_gate1) / area
+        dh2_dt = (q_gate1 - q_gate2) / area
+        friction = p['manning_n'] ** 2 * gravity * abs(q1) * q1 / (max(h1, 0.01) ** (10/3))
+        dq1_dt = gravity * p['width'] * h1 * p['slope'] - friction
+        friction2 = p['manning_n'] ** 2 * gravity * abs(q2) * q2 / (max(h2, 0.01) ** (10/3))
+        dq2_dt = gravity * p['width'] * h2 * p['slope'] - friction2
+        return np.array([
+            max(0, h1 + dh1_dt * dt),
+            max(0, h2 + dh2_dt * dt),
+            max(0, q1 + dq1_dt * dt),
+            max(0, q2 + dq2_dt * dt)
         ])
 
-        # Control input matrix
-        self.B = np.array([
-            [dt / A_cross, -dt / A_cross],
-            [0.001, -0.001],
-            [0.0, 0.0]
-        ])
+    def output(self, x: np.ndarray) -> np.ndarray:
+        return np.array([x[0], x[1]])
 
-        # Output matrix (we observe all states)
-        self.C = np.eye(3)
+    def get_linearization(self, x: np.ndarray, u: np.ndarray,
+                          eps: float = 1e-4) -> Tuple[np.ndarray, np.ndarray]:
+        A = np.zeros((self.n_states, self.n_states))
+        B = np.zeros((self.n_states, self.n_inputs))
+        f0 = self.predict(x, u)
+        for i in range(self.n_states):
+            x_plus = x.copy()
+            x_plus[i] += eps
+            A[:, i] = (self.predict(x_plus, u) - f0) / eps
+        for i in range(self.n_inputs):
+            u_plus = u.copy()
+            u_plus[i] += eps
+            B[:, i] = (self.predict(x, u_plus) - f0) / eps
+        return A, B
 
-    def _update_gains(self, scenarios: List[str]):
-        """Update MPC gains based on active scenarios with full coverage."""
-        if not scenarios:
-            gains = self.scenario_gains['NORMAL']
+
+class MPCController:
+    """Model Predictive Controller"""
+
+    def __init__(self, model: SystemModel, config: MPCConfig):
+        self.model = model
+        self.config = config
+        self.N_p = config.prediction_horizon
+        self.N_c = config.control_horizon
+        self.n_x = model.n_states
+        self.n_u = model.n_inputs
+        self.n_y = model.n_outputs
+        self.u_prev = np.zeros(self.n_u)
+        self.reference = np.zeros((self.N_p, self.n_y))
+        self.P_terminal = None
+        self._solve_count = 0
+        self._total_solve_time = 0.0
+
+    def set_reference(self, reference: np.ndarray):
+        if reference.ndim == 1:
+            self.reference = np.tile(reference, (self.N_p, 1))
         else:
-            # Priority order: Emergency > Seismic > Thermal/Structural > Hydraulic > Faults
-            priority = [
-                'COMBINED_THERMAL_SEISMIC',  # Highest priority
-                'S5.1',   # Main seismic
-                'S5.2',   # Aftershock
-                'S3.3',   # Bearing lock
-                'S3.1',   # Thermal bending
-                'S3.2',   # Rapid cooling
-                'S1.1',   # Hydraulic jump
-                'S1.2',   # Surge wave
-                'S2.1',   # VIV
-                'S4.1',   # Joint expansion
-                'S4.2',   # Joint compression
-                'S6.1',   # Sensor fault
-                'S6.2',   # Actuator fault
-                'MULTI_PHYSICS',  # General multi-physics
-            ]
-            gains = None
-            for s in priority:
-                if s in scenarios:
-                    gains = self.scenario_gains.get(s)
-                    if gains:
-                        break
-            if gains is None:
-                gains = self.scenario_gains['NORMAL']
+            self.reference = reference[:self.N_p]
 
-        self.config.w_h = gains['w_h']
-        self.config.w_fr = gains['w_fr']
-        self.config.w_T_delta = gains['w_T']
-        self.config.h_target = gains.get('target_h', 4.0)
-
-    def _build_qp_matrices(self, x0: np.ndarray, x_ref: np.ndarray) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-        """
-        Build QP matrices for the MPC problem.
-
-        minimize: (1/2) u' H u + f' u
-        subject to: A_ineq u <= b_ineq
-
-        Returns:
-            H, f, A_ineq, b_ineq
-        """
-        Np = self.config.prediction_horizon
-        Nc = self.config.control_horizon
-        nx = 3  # State dimension
-        nu = 2  # Control dimension
-
-        # Build prediction matrices
-        # x(k+i) = A^i x(k) + sum(A^(i-j-1) B u(k+j))
-        Psi = np.zeros((Np * nx, nx))  # Free response
-        Theta = np.zeros((Np * nx, Nc * nu))  # Forced response
-
-        A_power = np.eye(nx)
-        for i in range(Np):
-            Psi[i*nx:(i+1)*nx, :] = A_power @ self.A
-            A_power = A_power @ self.A
-
-            for j in range(min(i + 1, Nc)):
-                power = i - j
-                A_pow = np.eye(nx)
-                for _ in range(power):
-                    A_pow = A_pow @ self.A
-                Theta[i*nx:(i+1)*nx, j*nu:(j+1)*nu] = A_pow @ self.B
-
-        # Weight matrices
-        Q = np.diag([self.config.w_h, self.config.w_fr, self.config.w_T_delta])
-        Q_bar = np.kron(np.eye(Np), Q)
-
-        R = np.diag([self.config.w_Q_in, self.config.w_Q_out])
-        R_bar = np.kron(np.eye(Nc), R)
-
-        # Rate weight
-        dR = np.diag([self.config.w_dQ_in, self.config.w_dQ_out])
-        dR_bar = np.kron(np.eye(Nc), dR)
-
-        # Difference matrix for rate penalty
-        D = np.zeros((Nc * nu, Nc * nu))
-        for i in range(Nc):
-            D[i*nu:(i+1)*nu, i*nu:(i+1)*nu] = np.eye(nu)
-            if i > 0:
-                D[i*nu:(i+1)*nu, (i-1)*nu:i*nu] = -np.eye(nu)
-
-        # Reference trajectory
-        X_ref = np.tile(x_ref, Np)
-
-        # QP matrices
-        H = Theta.T @ Q_bar @ Theta + R_bar + D.T @ dR_bar @ D
-        H = (H + H.T) / 2  # Ensure symmetry
-
-        # Free response
-        x_free = Psi @ x0
-
-        f = Theta.T @ Q_bar @ (x_free - X_ref)
-
-        # Add term for rate from previous control
-        u_prev = np.zeros(Nc * nu)
-        u_prev[:nu] = self.last_u
-        f += D.T @ dR_bar @ (-D @ np.zeros(Nc * nu) + np.tile(-self.last_u, Nc))
-
-        # Constraints: Q_min <= u <= Q_max
-        # -dQ_max <= du <= dQ_max
-        n_u = Nc * nu
-
-        # Box constraints
-        A_ineq = np.vstack([np.eye(n_u), -np.eye(n_u), D, -D])
-
-        b_ineq = np.hstack([
-            np.ones(n_u) * self.config.Q_max,
-            -np.ones(n_u) * self.config.Q_min,
-            np.ones(n_u) * self.config.dQ_max + np.tile(self.last_u, Nc),
-            np.ones(n_u) * self.config.dQ_max - np.tile(self.last_u, Nc)
-        ])
-
-        return H, f, A_ineq, b_ineq
-
-    def _solve_qp(self, H: np.ndarray, f: np.ndarray,
-                  A_ineq: np.ndarray, b_ineq: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Solve the QP problem using a simple active-set method.
-        For production, use cvxpy or qpsolvers.
-        """
-        n = len(f)
-        max_iter = 100
-
-        # Start with unconstrained solution
+    def compute_terminal_cost(self, A: np.ndarray, B: np.ndarray):
         try:
-            u = np.linalg.solve(H, -f)
-        except np.linalg.LinAlgError:
-            return None
-
-        # Project onto constraints iteratively
-        for _ in range(max_iter):
-            violations = A_ineq @ u - b_ineq
-            if np.all(violations <= 1e-6):
-                break
-
-            # Find most violated constraint
-            worst_idx = np.argmax(violations)
-            if violations[worst_idx] <= 1e-6:
-                break
-
-            # Project onto constraint
-            a = A_ineq[worst_idx, :]
-            b = b_ineq[worst_idx]
-
-            # u_new = u - (a'u - b) / (a'a) * a
-            u = u - (np.dot(a, u) - b) / (np.dot(a, a) + 1e-10) * a
-
-        # Final constraint enforcement
-        u = np.clip(u, self.config.Q_min, self.config.Q_max)
-
-        return u
-
-    def _pid_fallback(self, state: Dict[str, Any]) -> np.ndarray:
-        """PID controller as fallback when MPC fails."""
-        self.fallback_count += 1
-
-        h = state.get('h', 4.0)
-        target_h = self.config.h_target
-
-        error = target_h - h
-
-        # PID calculation
-        self.pid_integral += error * self.config.dt
-        self.pid_integral = np.clip(self.pid_integral, -10.0, 10.0)
-
-        derivative = (error - self.pid_last_error) / self.config.dt
-        self.pid_last_error = error
-
-        output = self.pid_kp * error + self.pid_ki * self.pid_integral + self.pid_kd * derivative
-
-        Q_in = state.get('Q_in', 80.0)
-        Q_out = Q_in - output
-
-        Q_out = np.clip(Q_out, self.config.Q_min, self.config.Q_max)
-
-        return np.array([Q_in, Q_out])
-
-    def compute(self, state: Dict[str, Any], scenarios: List[str] = None) -> Dict[str, Any]:
-        """
-        Compute optimal control action.
-
-        Args:
-            state: Current system state
-            scenarios: Active scenarios for gain adaptation
-
-        Returns:
-            Control actions and diagnostics
-        """
-        self.solve_count += 1
-
-        # Update gains based on scenarios
-        if scenarios:
-            self._update_gains(scenarios)
-
-        # Extract state vector [h, v, T_delta]
-        h = state.get('h', 4.0)
-        v = state.get('v', 2.0)
-        T_sun = state.get('T_sun', 20.0)
-        T_shade = state.get('T_shade', 20.0)
-        T_delta = T_sun - T_shade
-
-        x0 = np.array([h, v, T_delta])
-
-        # Reference state
-        x_ref = np.array([self.config.h_target, self.config.v_target, 0.0])
-
-        # Build and solve QP
-        try:
-            H, f, A_ineq, b_ineq = self._build_qp_matrices(x0, x_ref)
-            u_optimal = self._solve_qp(H, f, A_ineq, b_ineq)
-
-            if u_optimal is None:
-                u = self._pid_fallback(state)
-                method = 'PID_FALLBACK'
+            Q = self.config.Q
+            R = self.config.R
+            if Q.shape[0] != A.shape[0]:
+                C = getattr(self.model, 'C', np.eye(A.shape[0])[:self.n_y])
+                Q_state = C.T @ Q @ C
             else:
-                # Extract first control action
-                u = u_optimal[:2]
-                method = 'MPC'
+                Q_state = Q
+            self.P_terminal = solve_discrete_are(A, B, Q_state, R)
+        except Exception as e:
+            logger.warning(f"Failed to compute terminal cost: {e}")
+            self.P_terminal = np.eye(self.n_x) * 10
 
-        except Exception:
-            u = self._pid_fallback(state)
-            method = 'PID_FALLBACK'
+    def _build_prediction_matrices(self, x0: np.ndarray, u0: np.ndarray) -> Tuple:
+        A, B = self.model.get_linearization(x0, u0)
+        C = getattr(self.model, 'C', np.eye(self.n_x)[:self.n_y])
+        Psi = np.zeros((self.N_p * self.n_y, self.n_x))
+        Theta = np.zeros((self.N_p * self.n_y, self.N_c * self.n_u))
+        A_power = np.eye(self.n_x)
+        for i in range(self.N_p):
+            A_power = A_power @ A
+            Psi[i*self.n_y:(i+1)*self.n_y, :] = C @ A_power
+            for j in range(min(i+1, self.N_c)):
+                A_power_j = np.linalg.matrix_power(A, i-j)
+                Theta[i*self.n_y:(i+1)*self.n_y, j*self.n_u:(j+1)*self.n_u] = C @ A_power_j @ B
+        return Psi, Theta, A, B
 
-        # Apply rate limiting
-        du = u - self.last_u
-        du = np.clip(du, -self.config.dQ_max, self.config.dQ_max)
-        u = self.last_u + du
+    def _objective_function(self, U_flat: np.ndarray, x0: np.ndarray,
+                            Psi: np.ndarray, Theta: np.ndarray) -> float:
+        Q = self.config.Q
+        R = self.config.R
+        S = self.config.S
+        U = U_flat.reshape(self.N_c, self.n_u)
+        Y_ref = self.reference.flatten()
+        Y_pred = Psi @ x0 + Theta @ U_flat
+        e = Y_pred - Y_ref
+        cost_tracking = e.T @ np.kron(np.eye(self.N_p), Q) @ e
+        cost_control = U_flat.T @ np.kron(np.eye(self.N_c), R) @ U_flat
+        dU = np.zeros_like(U)
+        dU[0] = U[0] - self.u_prev
+        dU[1:] = np.diff(U, axis=0)
+        dU_flat = dU.flatten()
+        cost_rate = dU_flat.T @ np.kron(np.eye(self.N_c), S) @ dU_flat
+        cost_terminal = 0.0
+        if self.config.use_terminal_cost and self.P_terminal is not None:
+            x_terminal = x0.copy()
+            A, B = self.model.get_linearization(x0, U[0])
+            for i in range(self.N_p):
+                u_i = U[min(i, self.N_c-1)]
+                x_terminal = A @ x_terminal + B @ u_i
+            cost_terminal = x_terminal.T @ self.P_terminal @ x_terminal
+        return float(cost_tracking + cost_control + cost_rate + cost_terminal)
 
-        # Update last control
-        self.last_u = u.copy()
+    def _get_constraints(self, x0: np.ndarray, Psi: np.ndarray, Theta: np.ndarray) -> List[Dict]:
+        constraints = []
+        cfg = self.config
+        if cfg.u_min is not None or cfg.u_max is not None:
+            def input_bounds(U_flat):
+                U = U_flat.reshape(self.N_c, self.n_u)
+                violations = []
+                for i in range(self.N_c):
+                    if cfg.u_min is not None:
+                        violations.extend(U[i] - cfg.u_min)
+                    if cfg.u_max is not None:
+                        violations.extend(cfg.u_max - U[i])
+                return np.array(violations)
+            constraints.append({'type': 'ineq', 'fun': input_bounds})
+        if cfg.du_min is not None or cfg.du_max is not None:
+            def rate_bounds(U_flat):
+                U = U_flat.reshape(self.N_c, self.n_u)
+                violations = []
+                dU0 = U[0] - self.u_prev
+                if cfg.du_min is not None:
+                    violations.extend(dU0 - cfg.du_min)
+                if cfg.du_max is not None:
+                    violations.extend(cfg.du_max - dU0)
+                for i in range(1, self.N_c):
+                    dU = U[i] - U[i-1]
+                    if cfg.du_min is not None:
+                        violations.extend(dU - cfg.du_min)
+                    if cfg.du_max is not None:
+                        violations.extend(cfg.du_max - dU)
+                return np.array(violations)
+            constraints.append({'type': 'ineq', 'fun': rate_bounds})
+        if cfg.y_min is not None or cfg.y_max is not None:
+            def output_bounds(U_flat):
+                Y_pred = Psi @ x0 + Theta @ U_flat
+                Y = Y_pred.reshape(self.N_p, self.n_y)
+                violations = []
+                for i in range(self.N_p):
+                    if cfg.y_min is not None:
+                        violations.extend(Y[i] - cfg.y_min)
+                    if cfg.y_max is not None:
+                        violations.extend(cfg.y_max - Y[i])
+                return np.array(violations)
+            constraints.append({'type': 'ineq', 'fun': output_bounds})
+        return constraints
 
+    def solve(self, x0: np.ndarray, disturbance: Optional[np.ndarray] = None) -> MPCResult:
+        start_time = time.time()
+        if disturbance is not None:
+            x0 = x0 + disturbance
+        Psi, Theta, A, B = self._build_prediction_matrices(x0, self.u_prev)
+        if self.config.use_terminal_cost and self.P_terminal is None:
+            self.compute_terminal_cost(A, B)
+        U0 = np.tile(self.u_prev, self.N_c)
+        bounds = None
+        if self.config.u_min is not None or self.config.u_max is not None:
+            lb = np.tile(self.config.u_min if self.config.u_min is not None
+                         else -np.inf * np.ones(self.n_u), self.N_c)
+            ub = np.tile(self.config.u_max if self.config.u_max is not None
+                         else np.inf * np.ones(self.n_u), self.N_c)
+            bounds = list(zip(lb, ub))
+        constraints = self._get_constraints(x0, Psi, Theta)
+        result = minimize(
+            fun=lambda U: self._objective_function(U, x0, Psi, Theta),
+            x0=U0,
+            method='SLSQP',
+            bounds=bounds,
+            constraints=constraints,
+            options={'maxiter': self.config.max_iterations, 'ftol': self.config.tolerance}
+        )
+        solve_time = time.time() - start_time
+        self._solve_count += 1
+        self._total_solve_time += solve_time
+        U_optimal = result.x.reshape(self.N_c, self.n_u)
+        Y_pred = (Psi @ x0 + Theta @ result.x).reshape(self.N_p, self.n_y)
+        X_pred = np.zeros((self.N_p + 1, self.n_x))
+        X_pred[0] = x0
+        for i in range(self.N_p):
+            u_i = U_optimal[min(i, self.N_c-1)]
+            X_pred[i+1] = self.model.predict(X_pred[i], u_i)
+        return MPCResult(
+            optimal_control=U_optimal,
+            predicted_states=X_pred,
+            predicted_outputs=Y_pred,
+            cost=result.fun,
+            success=result.success,
+            iterations=result.nit,
+            solve_time=solve_time
+        )
+
+    def step(self, x0: np.ndarray, disturbance: Optional[np.ndarray] = None) -> np.ndarray:
+        result = self.solve(x0, disturbance)
+        if result.success:
+            u_optimal = result.optimal_control[0]
+            self.u_prev = u_optimal
+            return u_optimal
+        else:
+            logger.warning("MPC solve failed, using previous control")
+            return self.u_prev
+
+    def get_statistics(self) -> Dict[str, Any]:
+        avg_time = self._total_solve_time / max(1, self._solve_count)
         return {
-            'Q_in': float(u[0]),
-            'Q_out': float(u[1]),
-            'method': method,
-            'solve_count': self.solve_count,
-            'fallback_count': self.fallback_count,
-            'gains': {
-                'w_h': self.config.w_h,
-                'w_fr': self.config.w_fr,
-                'w_T': self.config.w_T_delta
-            }
+            'solve_count': self._solve_count,
+            'total_solve_time': self._total_solve_time,
+            'average_solve_time': avg_time,
+            'prediction_horizon': self.N_p,
+            'control_horizon': self.N_c
         }
 
     def reset(self):
-        """Reset controller state."""
-        self.last_u = np.array([80.0, 80.0])
-        self.pid_integral = 0.0
-        self.pid_last_error = 0.0
-        self.solve_count = 0
-        self.fallback_count = 0
+        self.u_prev = np.zeros(self.n_u)
+        self._solve_count = 0
+        self._total_solve_time = 0.0
 
 
-class HybridController:
-    """
-    Hybrid controller combining MPC with scenario-specific overrides.
-    Provides seamless switching between control modes.
-    """
+class EconomicMPC(MPCController):
+    """Economic MPC for cost optimization"""
+
+    def __init__(self, model: SystemModel, config: MPCConfig,
+                 economic_cost: Callable[[np.ndarray, np.ndarray], float]):
+        super().__init__(model, config)
+        self.economic_cost = economic_cost
+        self.stage_cost_weight = 1.0
+
+    def _objective_function(self, U_flat: np.ndarray, x0: np.ndarray,
+                            Psi: np.ndarray, Theta: np.ndarray) -> float:
+        tracking_cost = super()._objective_function(U_flat, x0, Psi, Theta)
+        U = U_flat.reshape(self.N_c, self.n_u)
+        X = np.zeros((self.N_p + 1, self.n_x))
+        X[0] = x0
+        economic_total = 0.0
+        for i in range(self.N_p):
+            u_i = U[min(i, self.N_c-1)]
+            X[i+1] = self.model.predict(X[i], u_i)
+            economic_total += self.economic_cost(X[i+1], u_i)
+        return tracking_cost + self.stage_cost_weight * economic_total
+
+
+class DisturbanceObserver:
+    """Disturbance observer for MPC"""
+
+    def __init__(self, model: SystemModel, observer_gain: float = 0.5):
+        self.model = model
+        self.gain = observer_gain
+        self.disturbance_estimate = np.zeros(model.n_states)
+        self.x_predicted = None
+
+    def update(self, x_measured: np.ndarray, u_applied: np.ndarray):
+        if self.x_predicted is not None:
+            error = x_measured - self.x_predicted
+            self.disturbance_estimate = (1 - self.gain) * self.disturbance_estimate + self.gain * error
+        self.x_predicted = self.model.predict(x_measured, u_applied)
+
+    def get_estimate(self) -> np.ndarray:
+        return self.disturbance_estimate
+
+    def reset(self):
+        self.disturbance_estimate = np.zeros(self.model.n_states)
+        self.x_predicted = None
+
+
+class MPCManager:
+    """MPC Manager for multiple controllers"""
 
     def __init__(self):
-        self.mpc = AdaptiveMPC()
-        self.mode = 'AUTO'
-        self.emergency_active = False
+        self.controllers: Dict[str, MPCController] = {}
+        self.observers: Dict[str, DisturbanceObserver] = {}
+        self._lock = threading.Lock()
 
-        # Emergency thresholds
-        self.emergency_vibration = 50.0
-        self.emergency_fr = 1.5
+    def add_controller(self, name: str, controller: MPCController,
+                       observer: Optional[DisturbanceObserver] = None):
+        with self._lock:
+            self.controllers[name] = controller
+            if observer:
+                self.observers[name] = observer
 
-        # Performance metrics
-        self.control_history = []
-        self.max_history = 1000
+    def remove_controller(self, name: str):
+        with self._lock:
+            if name in self.controllers:
+                del self.controllers[name]
+            if name in self.observers:
+                del self.observers[name]
 
-    def decide(self, state: Dict[str, Any], scenarios: List[str] = None) -> Dict[str, Any]:
-        """
-        Main control decision function.
+    def step(self, name: str, state: np.ndarray,
+             measurement: Optional[np.ndarray] = None,
+             u_prev: Optional[np.ndarray] = None) -> np.ndarray:
+        with self._lock:
+            if name not in self.controllers:
+                raise ValueError(f"Controller '{name}' not found")
+            controller = self.controllers[name]
+            observer = self.observers.get(name)
+            disturbance = None
+            if observer and measurement is not None and u_prev is not None:
+                observer.update(measurement, u_prev)
+                disturbance = observer.get_estimate()
+            return controller.step(state, disturbance)
 
-        Args:
-            state: Current measured state
-            scenarios: Detected scenarios
+    def set_reference(self, name: str, reference: np.ndarray):
+        with self._lock:
+            if name in self.controllers:
+                self.controllers[name].set_reference(reference)
 
-        Returns:
-            Control actions with status
-        """
-        scenarios = scenarios or []
+    def get_all_statistics(self) -> Dict[str, Dict[str, Any]]:
+        with self._lock:
+            return {name: ctrl.get_statistics() for name, ctrl in self.controllers.items()}
 
-        # Emergency check
-        if self._check_emergency(state, scenarios):
-            return self._emergency_response(state)
 
-        # Compute MPC control
-        mpc_result = self.mpc.compute(state, scenarios)
+def create_aqueduct_mpc(sample_time: float = 60.0) -> Tuple[MPCController, AqueductModel]:
+    """Create MPC controller for aqueduct system"""
+    model = AqueductModel()
+    model.sample_time = sample_time
+    config = MPCConfig(
+        prediction_horizon=20,
+        control_horizon=10,
+        sample_time=sample_time,
+        n_states=4,
+        n_inputs=2,
+        n_outputs=2,
+        Q=np.diag([10.0, 10.0]),
+        R=np.diag([1.0, 1.0]),
+        S=np.diag([0.1, 0.1]),
+        u_min=np.array([0.0, 0.0]),
+        u_max=np.array([1.0, 1.0]),
+        du_min=np.array([-0.1, -0.1]),
+        du_max=np.array([0.1, 0.1]),
+        y_min=np.array([0.5, 0.5]),
+        y_max=np.array([5.0, 5.0])
+    )
+    controller = MPCController(model, config)
+    return controller, model
 
-        # Apply scenario-specific modifications
-        if 'S1.1' in scenarios:
-            # Hydraulic jump: be more aggressive with level control
-            mpc_result = self._modify_for_hydraulic(mpc_result, state)
 
-        elif 'S3.1' in scenarios:
-            # Thermal: increase flow for cooling
-            mpc_result = self._modify_for_thermal(mpc_result, state)
+_mpc_manager: Optional[MPCManager] = None
 
-        elif 'S4.1' in scenarios:
-            # Joint gap: careful level control
-            mpc_result = self._modify_for_joint(mpc_result, state)
 
-        # Build response
-        actions = {
-            'Q_in': mpc_result['Q_in'],
-            'Q_out': mpc_result['Q_out'],
-            'status': f"MPC_AUTO ({mpc_result['method']})",
-            'mode': self.mode,
-            'active_scenarios': scenarios,
-            'mpc_diagnostics': mpc_result
-        }
-
-        # Record history
-        self._record_history(actions)
-
-        return actions
-
-    def _check_emergency(self, state: Dict[str, Any], scenarios: List[str]) -> bool:
-        """Check if emergency response is needed."""
-        # S5.1 + S3.3 combination
-        if 'S5.1' in scenarios and 'S3.3' in scenarios:
-            return True
-
-        # Extreme vibration
-        if state.get('vib_amp', 0) > self.emergency_vibration * 1.5:
-            return True
-
-        # Extreme Froude number
-        if state.get('fr', 0) > self.emergency_fr:
-            return True
-
-        return False
-
-    def _emergency_response(self, state: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute emergency response."""
-        self.emergency_active = True
-
-        return {
-            'Q_in': 0.0,
-            'Q_out': 200.0,
-            'emergency_dump': True,
-            'status': 'EMERGENCY: DUMP ACTIVE',
-            'mode': 'EMERGENCY',
-            'active_scenarios': ['EMERGENCY'],
-            'mpc_diagnostics': None
-        }
-
-    def _modify_for_hydraulic(self, result: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-        """Modify control for hydraulic jump scenario."""
-        # Reduce outflow more aggressively to raise level
-        h = state.get('h', 4.0)
-        if h < 6.0:
-            result['Q_out'] = max(0, result['Q_out'] - 20.0)
-        return result
-
-    def _modify_for_thermal(self, result: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-        """Modify control for thermal bending scenario."""
-        # Increase flow for cooling
-        Q_in = result['Q_in']
-        if Q_in < 120.0:
-            result['Q_in'] = min(150.0, Q_in + 10.0)
-            result['Q_out'] = result['Q_in']  # Pass-through
-        return result
-
-    def _modify_for_joint(self, result: Dict[str, Any], state: Dict[str, Any]) -> Dict[str, Any]:
-        """Modify control for joint gap scenario."""
-        # Slightly higher water level for thermal mass
-        h = state.get('h', 4.0)
-        if h < 5.0:
-            result['Q_out'] = max(0, result['Q_out'] - 5.0)
-        return result
-
-    def _record_history(self, actions: Dict[str, Any]):
-        """Record control action for analysis."""
-        self.control_history.append({
-            'Q_in': actions['Q_in'],
-            'Q_out': actions['Q_out'],
-            'status': actions['status']
-        })
-
-        if len(self.control_history) > self.max_history:
-            self.control_history.pop(0)
-
-    def reset(self):
-        """Reset controller."""
-        self.mpc.reset()
-        self.mode = 'AUTO'
-        self.emergency_active = False
-        self.control_history = []
-
-    def get_performance_stats(self) -> Dict[str, Any]:
-        """Get controller performance statistics."""
-        if not self.control_history:
-            return {}
-
-        Q_in_values = [h['Q_in'] for h in self.control_history]
-        Q_out_values = [h['Q_out'] for h in self.control_history]
-
-        return {
-            'total_decisions': len(self.control_history),
-            'mpc_solves': self.mpc.solve_count,
-            'pid_fallbacks': self.mpc.fallback_count,
-            'fallback_rate': self.mpc.fallback_count / max(1, self.mpc.solve_count),
-            'Q_in_stats': {
-                'mean': np.mean(Q_in_values),
-                'std': np.std(Q_in_values),
-                'min': np.min(Q_in_values),
-                'max': np.max(Q_in_values)
-            },
-            'Q_out_stats': {
-                'mean': np.mean(Q_out_values),
-                'std': np.std(Q_out_values),
-                'min': np.min(Q_out_values),
-                'max': np.max(Q_out_values)
-            }
-        }
+def get_mpc_manager() -> MPCManager:
+    global _mpc_manager
+    if _mpc_manager is None:
+        _mpc_manager = MPCManager()
+    return _mpc_manager
