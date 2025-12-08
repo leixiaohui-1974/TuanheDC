@@ -29,7 +29,7 @@ from edge_computing import get_edge_manager, EdgeDeviceManager, EdgeDeviceType, 
 from digital_twin import get_twin_manager, DigitalTwinManager, ModelResolution
 from ml_control import get_ml_manager, MLControlManager, ModelType
 # V3.9 新增模块 - 移动端与可视化增强
-from mobile_api import get_mobile_manager, MobileDeviceManager, NotificationType, MobilePlatform
+from mobile_api import get_mobile_manager, MobileDeviceManager, NotificationType, DevicePlatform
 from advanced_visualization import get_viz_manager, AdvancedVisualizationManager, ChartType
 from i18n import get_i18n_manager, I18nManager, t as translate, SupportedLocale
 from blockchain_audit import get_audit_manager, BlockchainAuditManager, AuditEventType, AuditSeverity
