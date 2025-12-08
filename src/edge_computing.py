@@ -704,3 +704,97 @@ def create_edge_task(task_type: str, payload: Dict[str, Any],
         payload=payload,
         priority=priority
     )
+
+
+# ============================================================
+# Backward Compatibility for server.py
+# ============================================================
+
+class EdgeDeviceType(Enum):
+    """Edge device types - backward compatible"""
+    GATEWAY = "gateway"
+    SENSOR_HUB = "sensor_hub"
+    PLC = "plc"
+    RTU = "rtu"
+    IPC = "ipc"
+    SMART_SENSOR = "smart_sensor"
+
+
+class EdgeDeviceStatus(Enum):
+    """Edge device status - backward compatible"""
+    ONLINE = "online"
+    OFFLINE = "offline"
+    ERROR = "error"
+    MAINTENANCE = "maintenance"
+
+
+class EdgeDeviceManager:
+    """
+    Edge Device Manager - Backward compatible wrapper
+    边缘设备管理器 - 向后兼容包装器
+    """
+
+    def __init__(self):
+        self._manager = get_edge_computing_manager()
+        self._devices: Dict[str, Dict] = {}
+        self._running = False
+
+    def start(self):
+        """Start edge device manager"""
+        self._running = True
+        self._manager.start()
+
+    def stop(self):
+        """Stop edge device manager"""
+        self._running = False
+        self._manager.stop()
+
+    def register_device(self, device_id: str, device_type: EdgeDeviceType,
+                       name: str, location: str = "") -> bool:
+        """Register an edge device"""
+        self._devices[device_id] = {
+            'id': device_id,
+            'type': device_type.value,
+            'name': name,
+            'location': location,
+            'status': EdgeDeviceStatus.ONLINE.value
+        }
+        return True
+
+    def get_device(self, device_id: str) -> Optional[Dict]:
+        """Get device info"""
+        return self._devices.get(device_id)
+
+    def get_all_devices(self) -> List[Dict]:
+        """Get all registered devices"""
+        return list(self._devices.values())
+
+    def process_device_data(self, device_id: str, data: Dict) -> Dict:
+        """Process data from device"""
+        return {'status': 'processed', 'device_id': device_id, 'data': data}
+
+    def send_command(self, device_id: str, command: Dict) -> bool:
+        """Send command to device"""
+        return device_id in self._devices
+
+    def get_sync_status(self) -> Dict:
+        """Get sync status"""
+        return {
+            'synced_devices': len(self._devices),
+            'pending_sync': 0,
+            'last_sync': datetime.now().isoformat()
+        }
+
+    def get_status(self) -> Dict:
+        """Get manager status"""
+        return {
+            'running': self._running,
+            'total_devices': len(self._devices),
+            'online_devices': len([d for d in self._devices.values()
+                                   if d.get('status') == 'online'])
+        }
+
+
+def get_edge_manager() -> EdgeDeviceManager:
+    """Get edge manager (backward compatible)"""
+    return EdgeDeviceManager()

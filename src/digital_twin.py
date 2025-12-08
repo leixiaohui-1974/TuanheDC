@@ -830,3 +830,20 @@ def create_sample_aqueduct_scene() -> Scene:
     )
 
     return scene
+
+
+# ============================================================
+# Backward Compatibility for server.py
+# ============================================================
+
+class ModelResolution(Enum):
+    """Model resolution levels - backward compatible"""
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    ULTRA = "ultra"
+
+
+def get_twin_manager() -> DigitalTwinManager:
+    """Get twin manager (backward compatible alias)"""
+    return get_digital_twin_manager()

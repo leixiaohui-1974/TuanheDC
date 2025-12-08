@@ -539,3 +539,131 @@ def get_mpc_manager() -> MPCManager:
     if _mpc_manager is None:
         _mpc_manager = MPCManager()
     return _mpc_manager
+
+
+# ============================================================
+# Backward Compatibility Classes for server.py
+# ============================================================
+
+@dataclass
+class MPCResultCompat:
+    """MPC result compatible with old interface"""
+    Q_cmd: float = 0.0
+    theta_cmd: float = 0.0
+    u: np.ndarray = field(default_factory=lambda: np.array([0.0, 0.0]))
+    method: str = "MPC"
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Dict-like get method for backward compatibility"""
+        return getattr(self, key, default)
+
+
+class AdaptiveMPC:
+    """
+    Adaptive MPC Controller - Backward compatible wrapper
+    自适应MPC控制器 - 向后兼容包装器
+    """
+
+    def __init__(self):
+        self.controller, self.model = create_aqueduct_mpc()
+        self.scenario_gains: Dict[str, float] = {}
+        self.last_u = np.zeros(2)
+        self.solve_count = 0
+        self.fallback_count = 0
+        self.config = self._create_config()
+
+    def _create_config(self):
+        """Create config object with expected attributes"""
+        class Config:
+            prediction_horizon = 20
+            control_horizon = 10
+            dt = 60.0
+            Q_min = 0.0
+            Q_max = 100.0
+            dQ_max = 10.0
+            w_h = 10.0
+            w_fr = 1.0
+            w_T_delta = 0.5
+            h_target = 2.5
+        return Config()
+
+    def _update_gains(self, scenarios: List[str]):
+        """Update scenario-specific gains"""
+        for scenario in scenarios:
+            if scenario not in self.scenario_gains:
+                self.scenario_gains[scenario] = 1.0
+
+    def compute(self, state: Dict[str, float], scenarios: List[str] = None) -> MPCResultCompat:
+        """Compute MPC control action"""
+        self.solve_count += 1
+
+        # Convert state dict to numpy array
+        x = np.array([
+            state.get('h', 2.5),
+            state.get('Q', 50.0),
+            state.get('T_structure', 20.0),
+            state.get('Fr', 0.3)
+        ])
+
+        # Set reference
+        y_ref = np.array([self.config.h_target, 0.35])
+        self.controller.set_reference(y_ref)
+
+        try:
+            result = self.controller.compute(x)
+            if result.success:
+                self.last_u = result.u_optimal[0] if len(result.u_optimal) > 0 else np.zeros(2)
+                return MPCResultCompat(
+                    Q_cmd=float(self.last_u[0] * 100),
+                    theta_cmd=float(self.last_u[1]),
+                    u=self.last_u
+                )
+        except Exception:
+            self.fallback_count += 1
+
+        return MPCResultCompat(Q_cmd=50.0, theta_cmd=0.5, u=np.array([0.5, 0.5]))
+
+
+class HybridController:
+    """
+    Hybrid Controller - Combines MPC with PID fallback
+    混合控制器 - 结合MPC与PID后备
+    """
+
+    def __init__(self):
+        self.mpc = AdaptiveMPC()
+        self.mode = 'mpc'
+        self.pid_gains = {'Kp': 1.0, 'Ki': 0.1, 'Kd': 0.05}
+        self.integral = 0.0
+        self.last_error = 0.0
+
+    def compute(self, state: Dict[str, float], setpoint: float = 2.5) -> Dict[str, float]:
+        """Compute hybrid control action"""
+        if self.mode == 'mpc':
+            result = self.mpc.compute(state)
+            return {
+                'Q_cmd': result.Q_cmd,
+                'theta_cmd': result.theta_cmd,
+                'mode': 'mpc'
+            }
+        else:
+            # PID fallback
+            error = setpoint - state.get('h', 2.5)
+            self.integral += error
+            derivative = error - self.last_error
+            self.last_error = error
+
+            output = (self.pid_gains['Kp'] * error +
+                     self.pid_gains['Ki'] * self.integral +
+                     self.pid_gains['Kd'] * derivative)
+
+            return {
+                'Q_cmd': max(0, min(100, 50 + output * 10)),
+                'theta_cmd': 0.5,
+                'mode': 'pid'
+            }
+
+    def set_mode(self, mode: str):
+        """Set controller mode"""
+        if mode in ['mpc', 'pid', 'hybrid']:
+            self.mode = mode

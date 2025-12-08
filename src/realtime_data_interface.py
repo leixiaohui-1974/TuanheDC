@@ -42,6 +42,14 @@ class DataQuality(Enum):
     COMM_ERROR = "comm_error"
 
 
+class ConnectionStatus(Enum):
+    """Connection status"""
+    CONNECTED = "connected"
+    DISCONNECTED = "disconnected"
+    CONNECTING = "connecting"
+    ERROR = "error"
+
+
 class ModbusDataType(Enum):
     """Modbus data types"""
     COIL = "coil"

@@ -3428,6 +3428,581 @@ def update_prediction_history():
         return jsonify({'error': str(e)}), 500
 
 
+# ============================================================
+# V3.10 Phase 1-3 新功能API - 实时数据接口、告警事件管理、报表可视化、
+# 知识图谱、AIOps智能运维
+# ============================================================
+
+# 导入V3.10 Phase 1-3模块
+try:
+    from realtime_data_interface import (
+        RealtimeDataManager, ProtocolType, ConnectionStatus
+    )
+    from alarm_event_management import (
+        AlarmManager as AlarmEventManager, AlarmSeverity, AlarmState as AlarmStatus,
+        AlarmCategory as EventType
+    )
+    from reporting_visualization import (
+        ReportingManager as ReportingVisualizationManager, ReportType, ChartType as ReportChartType,
+        AggregationType as AggregationPeriod
+    )
+    from knowledge_graph import (
+        KnowledgeGraphManager, EntityType, RelationType
+    )
+    from aiops import (
+        AIOpsManager, AnomalyType, SeverityLevel, HealthStatus, MaintenanceType
+    )
+
+    # 初始化V3.10 Phase 1-3模块
+    realtime_data_manager = RealtimeDataManager()
+    alarm_event_manager = AlarmEventManager()
+    reporting_viz_manager = ReportingVisualizationManager()
+    knowledge_graph_manager = KnowledgeGraphManager()
+    aiops_manager = AIOpsManager()
+
+    V310_PHASE123_ENABLED = True
+    log_info("V3.10 Phase 1-3 modules loaded successfully", category="system")
+except ImportError as e:
+    V310_PHASE123_ENABLED = False
+    log_info(f"V3.10 Phase 1-3 modules not available: {e}", category="system")
+
+
+# ---------- 实时数据接口 API ----------
+
+@app.route('/api/v310/realtime/status')
+def get_realtime_status():
+    """获取实时数据系统状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        return jsonify(realtime_data_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/realtime/connections')
+def get_realtime_connections():
+    """获取所有连接列表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        connections = realtime_data_manager.get_all_connections()
+        return jsonify({
+            'connections': [c.to_dict() if hasattr(c, 'to_dict') else str(c) for c in connections]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/realtime/data/<string:connection_name>')
+def get_realtime_data(connection_name):
+    """获取指定连接的实时数据"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = realtime_data_manager.get_data(connection_name)
+        return jsonify({'connection': connection_name, 'data': data})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/realtime/subscribe', methods=['POST'])
+def subscribe_realtime_data():
+    """订阅数据"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        connection = data.get('connection')
+        tags = data.get('tags', [])
+        result = realtime_data_manager.subscribe(connection, tags)
+        return jsonify({'status': 'subscribed', 'connection': connection, 'tags': tags})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------- 告警事件管理 API ----------
+
+@app.route('/api/v310/alarm/status')
+def get_alarm_status():
+    """获取告警系统状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        return jsonify(alarm_event_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/alarm/active')
+def get_active_alarms():
+    """获取当前活动告警"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        severity = request.args.get('severity')
+        alarms = alarm_event_manager.get_active_alarms(
+            severity=AlarmSeverity[severity.upper()] if severity else None
+        )
+        return jsonify({
+            'alarms': [a.to_dict() if hasattr(a, 'to_dict') else str(a) for a in alarms]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/alarm/trigger', methods=['POST'])
+def trigger_alarm():
+    """触发告警"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        alarm_id = alarm_event_manager.trigger_alarm(
+            source=data.get('source', 'api'),
+            message=data.get('message', ''),
+            severity=AlarmSeverity[data.get('severity', 'WARNING').upper()],
+            category=data.get('category', 'system'),
+            data=data.get('data', {})
+        )
+        return jsonify({'status': 'triggered', 'alarm_id': alarm_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/alarm/acknowledge', methods=['POST'])
+def acknowledge_alarm():
+    """确认告警"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        alarm_id = data.get('alarm_id')
+        user = data.get('user', 'operator')
+        result = alarm_event_manager.acknowledge_alarm(alarm_id, user)
+        return jsonify({'status': 'acknowledged', 'alarm_id': alarm_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/alarm/history')
+def get_alarm_history():
+    """获取告警历史"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        limit = int(request.args.get('limit', 100))
+        history = alarm_event_manager.get_history(limit=limit)
+        return jsonify({
+            'history': [h.to_dict() if hasattr(h, 'to_dict') else str(h) for h in history]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/event/log', methods=['POST'])
+def log_event():
+    """记录事件"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        event_id = alarm_event_manager.log_event(
+            event_type=EventType[data.get('type', 'SYSTEM').upper()],
+            source=data.get('source', 'api'),
+            description=data.get('description', ''),
+            data=data.get('data', {})
+        )
+        return jsonify({'status': 'logged', 'event_id': event_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/event/query')
+def query_events():
+    """查询事件"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        event_type = request.args.get('type')
+        limit = int(request.args.get('limit', 100))
+        events = alarm_event_manager.query_events(
+            event_type=EventType[event_type.upper()] if event_type else None,
+            limit=limit
+        )
+        return jsonify({
+            'events': [e.to_dict() if hasattr(e, 'to_dict') else str(e) for e in events]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------- 报表可视化 API ----------
+
+@app.route('/api/v310/report/status')
+def get_report_status():
+    """获取报表系统状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        return jsonify(reporting_viz_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/report/generate', methods=['POST'])
+def generate_report():
+    """生成报表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        report = reporting_viz_manager.generate_report(
+            report_type=ReportType[data.get('type', 'DAILY').upper()],
+            start_time=data.get('start_time'),
+            end_time=data.get('end_time'),
+            parameters=data.get('parameters', {})
+        )
+        return jsonify(report.to_dict() if hasattr(report, 'to_dict') else report)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/report/templates')
+def get_report_templates():
+    """获取报表模板列表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        templates = reporting_viz_manager.get_templates()
+        return jsonify({'templates': templates})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/report/chart', methods=['POST'])
+def generate_chart():
+    """生成图表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        chart = reporting_viz_manager.generate_chart(
+            chart_type=ReportChartType[data.get('type', 'LINE').upper()],
+            data_source=data.get('data_source', {}),
+            options=data.get('options', {})
+        )
+        return jsonify(chart)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/report/dashboard')
+def get_report_dashboard():
+    """获取报表仪表盘"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        dashboard_id = request.args.get('id', 'default')
+        dashboard_data = reporting_viz_manager.get_dashboard(dashboard_id)
+        return jsonify(dashboard_data)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/report/export', methods=['POST'])
+def export_report():
+    """导出报表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        report_id = data.get('report_id')
+        export_format = data.get('format', 'pdf')
+        result = reporting_viz_manager.export_report(report_id, export_format)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------- 知识图谱 API ----------
+
+@app.route('/api/v310/kg/status')
+def get_knowledge_graph_status():
+    """获取知识图谱状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        return jsonify(knowledge_graph_manager.get_status())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/entities')
+def get_kg_entities():
+    """获取实体列表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        entity_type = request.args.get('type')
+        entities = knowledge_graph_manager.get_entities(
+            entity_type=EntityType[entity_type.upper()] if entity_type else None
+        )
+        return jsonify({
+            'entities': [e.to_dict() if hasattr(e, 'to_dict') else str(e) for e in entities]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/entity/<string:entity_id>')
+def get_kg_entity(entity_id):
+    """获取实体详情"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        entity = knowledge_graph_manager.get_entity(entity_id)
+        if entity:
+            return jsonify(entity.to_dict() if hasattr(entity, 'to_dict') else entity)
+        return jsonify({'error': 'Entity not found'}), 404
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/entity', methods=['POST'])
+def create_kg_entity():
+    """创建实体"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        entity_id = knowledge_graph_manager.add_entity(
+            entity_type=EntityType[data.get('type', 'EQUIPMENT').upper()],
+            name=data.get('name'),
+            properties=data.get('properties', {})
+        )
+        return jsonify({'status': 'created', 'entity_id': entity_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/relation', methods=['POST'])
+def create_kg_relation():
+    """创建关系"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        relation_id = knowledge_graph_manager.add_relation(
+            source_id=data.get('source_id'),
+            target_id=data.get('target_id'),
+            relation_type=RelationType[data.get('type', 'CONNECTS_TO').upper()],
+            properties=data.get('properties', {})
+        )
+        return jsonify({'status': 'created', 'relation_id': relation_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/query', methods=['POST'])
+def query_knowledge_graph():
+    """查询知识图谱"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        query = data.get('query', {})
+        result = knowledge_graph_manager.query(query)
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/path', methods=['POST'])
+def find_kg_path():
+    """查找路径"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        path = knowledge_graph_manager.find_path(
+            start_id=data.get('start_id'),
+            end_id=data.get('end_id'),
+            max_depth=data.get('max_depth', 5)
+        )
+        return jsonify({'path': path})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/kg/inference', methods=['POST'])
+def run_kg_inference():
+    """运行推理"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        result = knowledge_graph_manager.run_inference(
+            rule_name=data.get('rule'),
+            context=data.get('context', {})
+        )
+        return jsonify(result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+# ---------- AIOps智能运维 API ----------
+
+@app.route('/api/v310/aiops/status')
+def get_aiops_status():
+    """获取AIOps系统状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        return jsonify(aiops_manager.get_statistics())
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/anomalies')
+def get_aiops_anomalies():
+    """获取异常列表"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        anomalies = aiops_manager.get_active_anomalies()
+        return jsonify({
+            'anomalies': [a.to_dict() if hasattr(a, 'to_dict') else str(a) for a in anomalies]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/process_metric', methods=['POST'])
+def process_aiops_metric():
+    """处理指标数据"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        result = aiops_manager.process_metric(
+            entity_id=data.get('entity_id'),
+            metric_name=data.get('metric_name'),
+            value=data.get('value')
+        )
+        if result:
+            return jsonify({'anomaly_detected': True, 'anomaly': result.to_dict()})
+        return jsonify({'anomaly_detected': False})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/diagnose', methods=['POST'])
+def run_aiops_diagnosis():
+    """运行诊断"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        result = aiops_manager.diagnose_entity(
+            entity_id=data.get('entity_id'),
+            metrics=data.get('metrics', {})
+        )
+        return jsonify(result.to_dict() if hasattr(result, 'to_dict') else result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/maintenance/predict', methods=['POST'])
+def predict_maintenance():
+    """预测维护"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        result = aiops_manager.predict_maintenance(
+            entity_id=data.get('entity_id')
+        )
+        return jsonify(result.to_dict() if hasattr(result, 'to_dict') else result)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/remediate', methods=['POST'])
+def get_remediation():
+    """获取修复建议"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        anomaly_id = data.get('anomaly_id')
+        actions = aiops_manager.get_remediation_actions(anomaly_id)
+        return jsonify({
+            'actions': [a.to_dict() if hasattr(a, 'to_dict') else str(a) for a in actions]
+        })
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/resolve', methods=['POST'])
+def resolve_anomaly():
+    """解决异常"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        data = request.get_json()
+        anomaly_id = data.get('anomaly_id')
+        result = aiops_manager.resolve_anomaly(anomaly_id)
+        return jsonify({'status': 'resolved' if result else 'not_found', 'anomaly_id': anomaly_id})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/v310/aiops/health/<string:entity_id>')
+def get_entity_health(entity_id):
+    """获取实体健康状态"""
+    if not V310_PHASE123_ENABLED:
+        return jsonify({'error': 'V3.10 Phase 1-3 modules not available'}), 503
+
+    try:
+        health = aiops_manager.get_entity_health(entity_id)
+        return jsonify(health)
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # 启动时记录日志
 log_info("TAOS V3.10 Server starting", category="system")
 audit_manager.log_system_event("start", {"version": "3.10.0"})

@@ -238,7 +238,52 @@ src/
 | `StatePredictionEngine` | Multi-horizon, multi-method prediction |
 | `ScenarioPrediction` | What-if scenario analysis |
 
-## API Endpoints (190+)
+### V3.10 Enhanced Features (Phase 1-3)
+
+#### Real-time Data Interface (`realtime_data_interface.py`)
+| Component | Description |
+|-----------|-------------|
+| `RealtimeDataManager` | Multi-protocol real-time data management |
+| `OPCUAAdapter` | OPC-UA protocol adapter with browsing and subscription |
+| `ModbusAdapter` | Modbus TCP/RTU protocol with batch read/write |
+| `MQTTAdapter` | MQTT protocol with topic subscription |
+| `DataBuffer` | Circular buffer with statistics and quality tracking |
+
+#### Alarm Event Management (`alarm_event_management.py`)
+| Component | Description |
+|-----------|-------------|
+| `AlarmManager` | Multi-level alarm management system |
+| `AlarmRule` | Configurable alarm rules with conditions |
+| `EventCorrelator` | Event correlation and pattern detection |
+| `NotificationDispatcher` | Email, SMS, Webhook notification support |
+
+#### Reporting Visualization (`reporting_visualization.py`)
+| Component | Description |
+|-----------|-------------|
+| `ReportingManager` | Comprehensive reporting system |
+| `DataAggregator` | Time-series data aggregation (hour, day, week, month) |
+| `ChartGenerator` | ECharts-compatible chart generation |
+| `ReportExporter` | Export to PDF, Excel, CSV, HTML |
+| `DashboardManager` | Customizable dashboard management |
+
+#### Knowledge Graph (`knowledge_graph.py`)
+| Component | Description |
+|-----------|-------------|
+| `KnowledgeGraphManager` | Graph-based knowledge management |
+| `KnowledgeGraph` | Entity-relationship graph operations |
+| `InferenceRule` | Rule-based inference engine |
+| `AqueductKnowledgeBuilder` | Domain-specific knowledge builder |
+
+#### AIOps (`aiops.py`)
+| Component | Description |
+|-----------|-------------|
+| `AIOpsManager` | Intelligent operations management |
+| `AnomalyDetector` | Statistical anomaly detection (spike, drop, trend, oscillation) |
+| `IntelligentDiagnostics` | Root cause analysis and diagnosis |
+| `PredictiveMaintenance` | Equipment health and maintenance prediction |
+| `AutoRemediation` | Automated remediation actions |
+
+## API Endpoints (230+)
 
 ### Core APIs
 | Endpoint | Method | Description |
@@ -400,6 +445,59 @@ src/
 | `/api/v310/prediction/accuracy` | GET | Prediction accuracy |
 | `/api/v310/prediction/status` | GET | Prediction engine status |
 
+### V3.10 Real-time Data APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v310/realtime/status` | GET | Real-time data system status |
+| `/api/v310/realtime/connections` | GET | List all connections |
+| `/api/v310/realtime/data/<name>` | GET | Get data from connection |
+| `/api/v310/realtime/subscribe` | POST | Subscribe to data tags |
+
+### V3.10 Alarm APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v310/alarm/status` | GET | Alarm system status |
+| `/api/v310/alarm/active` | GET | Active alarms |
+| `/api/v310/alarm/trigger` | POST | Trigger alarm |
+| `/api/v310/alarm/acknowledge` | POST | Acknowledge alarm |
+| `/api/v310/alarm/history` | GET | Alarm history |
+| `/api/v310/event/log` | POST | Log event |
+| `/api/v310/event/query` | GET | Query events |
+
+### V3.10 Report APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v310/report/status` | GET | Report system status |
+| `/api/v310/report/generate` | POST | Generate report |
+| `/api/v310/report/templates` | GET | Report templates |
+| `/api/v310/report/chart` | POST | Generate chart |
+| `/api/v310/report/dashboard` | GET | Get dashboard |
+| `/api/v310/report/export` | POST | Export report |
+
+### V3.10 Knowledge Graph APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v310/kg/status` | GET | Knowledge graph status |
+| `/api/v310/kg/entities` | GET | List entities |
+| `/api/v310/kg/entity/<id>` | GET | Get entity details |
+| `/api/v310/kg/entity` | POST | Create entity |
+| `/api/v310/kg/relation` | POST | Create relation |
+| `/api/v310/kg/query` | POST | Query knowledge graph |
+| `/api/v310/kg/path` | POST | Find path between entities |
+| `/api/v310/kg/inference` | POST | Run inference |
+
+### V3.10 AIOps APIs
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/api/v310/aiops/status` | GET | AIOps system status |
+| `/api/v310/aiops/anomalies` | GET | Active anomalies |
+| `/api/v310/aiops/process_metric` | POST | Process metric data |
+| `/api/v310/aiops/diagnose` | POST | Run diagnosis |
+| `/api/v310/aiops/maintenance/predict` | POST | Predict maintenance |
+| `/api/v310/aiops/remediate` | POST | Get remediation actions |
+| `/api/v310/aiops/resolve` | POST | Resolve anomaly |
+| `/api/v310/aiops/health/<id>` | GET | Entity health status |
+
 ## Installation & Usage
 
 ### Requirements
@@ -453,15 +551,15 @@ cd src && python state_prediction.py
 
 | Category | Count |
 |----------|-------|
-| Total Python Modules | 39 |
-| API Endpoints | 190+ |
+| Total Python Modules | 45 |
+| API Endpoints | 230+ |
 | Scenario Coverage | 1,778,880 |
 | Digital Twin Components | 75 |
 | Virtual Sensors | 20+ |
 | ML Models | 5 |
 | Edge Device Types | 6 |
 | Supported Languages | 10 |
-| Integration Tests | 29 |
+| Integration Tests | 223+ |
 
 ## Version History
 
@@ -477,6 +575,7 @@ cd src && python state_prediction.py
 | V3.7 | Docker, monitoring, backup/restore |
 | V3.8 | Distributed cluster, edge computing, digital twin, AI/ML |
 | V3.9 | Mobile API, advanced visualization, i18n, blockchain audit |
+| V3.10 | Sensor/actuator simulation, data governance, data assimilation, state evaluation/prediction, real-time data interface, alarm management, knowledge graph, AIOps |
 
 ## License
 This project is part of the South-to-North Water Diversion Project infrastructure management system.
