@@ -425,6 +425,213 @@ def run_memory_benchmark():
     print("=" * 80)
 
 
+# =============================================================================
+# Phase 1-3 Module Benchmarks
+# =============================================================================
+
+def run_realtime_data_benchmarks(bench: V310Benchmark):
+    """Benchmark real-time data interface operations."""
+    from realtime_data_interface import RealtimeDataManager, DataBuffer
+
+    manager = RealtimeDataManager()
+    buffer = DataBuffer(max_size=1000)
+
+    # Benchmark data buffer operations
+    def buffer_add():
+        from datetime import datetime
+        buffer.add("test_tag", 25.5, datetime.now())
+
+    bench.benchmark("Realtime: Buffer add", buffer_add, iterations=1000)
+
+    # Benchmark buffer statistics
+    for i in range(100):
+        from datetime import datetime
+        buffer.add(f"stat_tag_{i % 10}", float(i), datetime.now())
+
+    def buffer_stats():
+        buffer.get_statistics("stat_tag_0")
+
+    bench.benchmark("Realtime: Buffer stats", buffer_stats, iterations=500)
+
+    # Benchmark manager status
+    def manager_status():
+        manager.get_status()
+
+    bench.benchmark("Realtime: Manager status", manager_status, iterations=500)
+
+
+def run_alarm_benchmarks(bench: V310Benchmark):
+    """Benchmark alarm event management operations."""
+    from alarm_event_management import AlarmManager, AlarmSeverity, AlarmCategory
+
+    manager = AlarmManager()
+
+    # Add some rules
+    from alarm_event_management import AlarmRule, AlarmCondition, ComparisonOperator
+    rule = AlarmRule(
+        rule_id="bench_rule",
+        name="Benchmark Rule",
+        condition=AlarmCondition(
+            tag="temperature",
+            operator=ComparisonOperator.GREATER_THAN,
+            value=100
+        ),
+        severity=AlarmSeverity.HIGH,
+        category=AlarmCategory.PROCESS
+    )
+    manager.add_rule(rule)
+
+    # Benchmark rule evaluation
+    def evaluate_data():
+        manager.evaluate_data({"temperature": 50.0, "pressure": 101.3})
+
+    bench.benchmark("Alarm: Evaluate data", evaluate_data, iterations=500)
+
+    # Benchmark get active alarms
+    def get_active():
+        manager.get_active_alarms()
+
+    bench.benchmark("Alarm: Get active", get_active, iterations=500)
+
+    # Benchmark alarm history
+    def get_history():
+        manager.get_alarm_history(limit=10)
+
+    bench.benchmark("Alarm: Get history", get_history, iterations=500)
+
+
+def run_reporting_benchmarks(bench: V310Benchmark):
+    """Benchmark reporting and visualization operations."""
+    from reporting_visualization import (
+        ReportingManager, DataAggregator, ChartGenerator,
+        AggregationType, ChartType
+    )
+
+    manager = ReportingManager()
+    aggregator = DataAggregator()
+    chart_gen = ChartGenerator()
+
+    # Add test data
+    from datetime import datetime, timedelta
+    base_time = datetime.now()
+    test_data = []
+    for i in range(100):
+        test_data.append({
+            'timestamp': base_time - timedelta(hours=i),
+            'value': 50 + (i % 20)
+        })
+
+    for d in test_data:
+        aggregator.add_data_point("test_metric", d['value'], d['timestamp'])
+
+    # Benchmark aggregation
+    def aggregate_hourly():
+        aggregator.get_aggregated("test_metric", AggregationType.HOURLY)
+
+    bench.benchmark("Report: Hourly aggregation", aggregate_hourly, iterations=200)
+
+    # Benchmark chart generation
+    def generate_line_chart():
+        chart_gen.generate_line_chart(
+            "Test Chart",
+            {"test": [1, 2, 3, 4, 5]},
+            ["A", "B", "C", "D", "E"]
+        )
+
+    bench.benchmark("Report: Line chart gen", generate_line_chart, iterations=200)
+
+    # Benchmark gauge chart
+    def generate_gauge():
+        chart_gen.generate_gauge_chart("Test Gauge", 75, 0, 100)
+
+    bench.benchmark("Report: Gauge chart gen", generate_gauge, iterations=200)
+
+
+def run_knowledge_graph_benchmarks(bench: V310Benchmark):
+    """Benchmark knowledge graph operations."""
+    from knowledge_graph import KnowledgeGraphManager, EntityType, RelationType
+
+    manager = KnowledgeGraphManager()
+
+    # Build a test graph
+    entities = []
+    for i in range(50):
+        eid = manager.add_entity(
+            EntityType.EQUIPMENT,
+            f"Equipment_{i}",
+            {"location": f"Section_{i % 5}"}
+        )
+        entities.append(eid)
+
+    # Add relations
+    for i in range(len(entities) - 1):
+        manager.add_relation(
+            entities[i], entities[i + 1],
+            RelationType.CONNECTS_TO
+        )
+
+    # Benchmark entity query
+    def query_entities():
+        manager.get_entities(EntityType.EQUIPMENT)
+
+    bench.benchmark("KG: Query entities", query_entities, iterations=200)
+
+    # Benchmark neighbor query
+    def query_neighbors():
+        manager.get_neighbors(entities[25])
+
+    bench.benchmark("KG: Query neighbors", query_neighbors, iterations=200)
+
+    # Benchmark path finding
+    def find_path():
+        manager.find_path(entities[0], entities[10], max_depth=5)
+
+    bench.benchmark("KG: Find path", find_path, iterations=100)
+
+    # Benchmark graph statistics
+    def get_stats():
+        manager.get_statistics()
+
+    bench.benchmark("KG: Get statistics", get_stats, iterations=200)
+
+
+def run_aiops_benchmarks(bench: V310Benchmark):
+    """Benchmark AIOps operations."""
+    from aiops import AIOpsManager, AnomalyDetector, IntelligentDiagnostics
+
+    manager = AIOpsManager()
+    detector = AnomalyDetector()
+    diagnostics = IntelligentDiagnostics()
+
+    # Add baseline data
+    for i in range(100):
+        detector.add_data_point("entity_001", "temperature", 25 + (i % 5) * 0.1)
+
+    # Benchmark anomaly detection
+    def detect_anomaly():
+        detector.detect("entity_001", "temperature", 25.5)
+
+    bench.benchmark("AIOps: Anomaly detect", detect_anomaly, iterations=500)
+
+    # Benchmark metric processing
+    def process_metric():
+        manager.process_metric("entity_001", "temperature", 25.5)
+
+    bench.benchmark("AIOps: Process metric", process_metric, iterations=300)
+
+    # Benchmark diagnosis
+    def run_diagnosis():
+        diagnostics.diagnose("entity_001", {"temperature": 25.5}, [])
+
+    bench.benchmark("AIOps: Diagnosis", run_diagnosis, iterations=200)
+
+    # Benchmark statistics
+    def get_statistics():
+        manager.get_statistics()
+
+    bench.benchmark("AIOps: Get statistics", get_statistics, iterations=500)
+
+
 def main():
     """Run all benchmarks."""
     print("=" * 80)
@@ -457,6 +664,25 @@ def main():
 
     print("Running full pipeline benchmark...")
     run_full_pipeline_benchmark(bench)
+
+    # Phase 1-3 benchmarks
+    print("\nRunning Phase 1-3 benchmarks...")
+    print("-" * 40)
+
+    print("Running real-time data benchmarks...")
+    run_realtime_data_benchmarks(bench)
+
+    print("Running alarm benchmarks...")
+    run_alarm_benchmarks(bench)
+
+    print("Running reporting benchmarks...")
+    run_reporting_benchmarks(bench)
+
+    print("Running knowledge graph benchmarks...")
+    run_knowledge_graph_benchmarks(bench)
+
+    print("Running AIOps benchmarks...")
+    run_aiops_benchmarks(bench)
 
     bench.print_results()
 
