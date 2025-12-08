@@ -575,6 +575,416 @@ class TestV310APIIntegration(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
 
 
+# =============================================================================
+# Phase 1-3 API Tests
+# =============================================================================
+
+class TestV310Phase123APIEndpoints(unittest.TestCase):
+    """Test V3.10 Phase 1-3 REST API endpoints."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Flask test client."""
+        from server import app
+        app.config['TESTING'] = True
+        cls.client = app.test_client()
+
+    # =========================================================================
+    # Real-time Data Interface API Tests (Phase 1)
+    # =========================================================================
+
+    def test_realtime_status(self):
+        """Test real-time data system status endpoint."""
+        response = self.client.get('/api/v310/realtime/status')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIsInstance(result, dict)
+
+    def test_realtime_connections(self):
+        """Test real-time connections endpoint."""
+        response = self.client.get('/api/v310/realtime/connections')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('connections', result)
+
+    def test_realtime_data(self):
+        """Test real-time data retrieval endpoint."""
+        response = self.client.get('/api/v310/realtime/data/test_connection')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('connection', result)
+
+    def test_realtime_subscribe(self):
+        """Test real-time data subscription endpoint."""
+        data = {
+            'connection': 'test_connection',
+            'tags': ['tag1', 'tag2']
+        }
+        response = self.client.post('/api/v310/realtime/subscribe',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'subscribed')
+
+    # =========================================================================
+    # Alarm Event Management API Tests (Phase 1)
+    # =========================================================================
+
+    def test_alarm_status(self):
+        """Test alarm system status endpoint."""
+        response = self.client.get('/api/v310/alarm/status')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIsInstance(result, dict)
+
+    def test_alarm_active(self):
+        """Test active alarms endpoint."""
+        response = self.client.get('/api/v310/alarm/active')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('alarms', result)
+
+    def test_alarm_trigger(self):
+        """Test alarm trigger endpoint."""
+        data = {
+            'source': 'api_test',
+            'message': 'Test alarm',
+            'severity': 'WARNING',
+            'category': 'SYSTEM'
+        }
+        response = self.client.post('/api/v310/alarm/trigger',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'triggered')
+
+    def test_alarm_acknowledge(self):
+        """Test alarm acknowledge endpoint."""
+        data = {
+            'alarm_id': 'test_alarm_001',
+            'user': 'test_operator'
+        }
+        response = self.client.post('/api/v310/alarm/acknowledge',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'acknowledged')
+
+    def test_alarm_history(self):
+        """Test alarm history endpoint."""
+        response = self.client.get('/api/v310/alarm/history?limit=50')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('history', result)
+
+    def test_event_log(self):
+        """Test event log endpoint."""
+        data = {
+            'type': 'SYSTEM',
+            'source': 'api_test',
+            'description': 'Test event logging'
+        }
+        response = self.client.post('/api/v310/event/log',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'logged')
+
+    def test_event_query(self):
+        """Test event query endpoint."""
+        response = self.client.get('/api/v310/event/query?limit=50')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('events', result)
+
+    # =========================================================================
+    # Reporting Visualization API Tests (Phase 1)
+    # =========================================================================
+
+    def test_report_status(self):
+        """Test report system status endpoint."""
+        response = self.client.get('/api/v310/report/status')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIsInstance(result, dict)
+
+    def test_report_generate(self):
+        """Test report generation endpoint."""
+        data = {
+            'type': 'DAILY',
+            'parameters': {'include_charts': True}
+        }
+        response = self.client.post('/api/v310/report/generate',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_report_templates(self):
+        """Test report templates endpoint."""
+        response = self.client.get('/api/v310/report/templates')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('templates', result)
+
+    def test_report_chart(self):
+        """Test chart generation endpoint."""
+        data = {
+            'type': 'LINE',
+            'data_source': {'series': [1, 2, 3, 4, 5]},
+            'options': {'title': 'Test Chart'}
+        }
+        response = self.client.post('/api/v310/report/chart',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_report_dashboard(self):
+        """Test dashboard retrieval endpoint."""
+        response = self.client.get('/api/v310/report/dashboard?id=default')
+        self.assertEqual(response.status_code, 200)
+
+    def test_report_export(self):
+        """Test report export endpoint."""
+        data = {
+            'report_id': 'test_report',
+            'format': 'pdf'
+        }
+        response = self.client.post('/api/v310/report/export',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    # =========================================================================
+    # Knowledge Graph API Tests (Phase 2)
+    # =========================================================================
+
+    def test_kg_status(self):
+        """Test knowledge graph status endpoint."""
+        response = self.client.get('/api/v310/kg/status')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIsInstance(result, dict)
+
+    def test_kg_entities(self):
+        """Test knowledge graph entities endpoint."""
+        response = self.client.get('/api/v310/kg/entities')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('entities', result)
+
+    def test_kg_create_entity(self):
+        """Test entity creation endpoint."""
+        data = {
+            'type': 'EQUIPMENT',
+            'name': 'Test Equipment',
+            'properties': {'location': 'Section A'}
+        }
+        response = self.client.post('/api/v310/kg/entity',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'created')
+
+    def test_kg_create_relation(self):
+        """Test relation creation endpoint."""
+        data = {
+            'source_id': 'entity_001',
+            'target_id': 'entity_002',
+            'type': 'CONNECTS_TO',
+            'properties': {}
+        }
+        response = self.client.post('/api/v310/kg/relation',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertEqual(result['status'], 'created')
+
+    def test_kg_query(self):
+        """Test knowledge graph query endpoint."""
+        data = {
+            'query': {'entity_type': 'EQUIPMENT'}
+        }
+        response = self.client.post('/api/v310/kg/query',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_kg_find_path(self):
+        """Test knowledge graph path finding endpoint."""
+        data = {
+            'start_id': 'entity_001',
+            'end_id': 'entity_002',
+            'max_depth': 3
+        }
+        response = self.client.post('/api/v310/kg/path',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('path', result)
+
+    def test_kg_inference(self):
+        """Test knowledge graph inference endpoint."""
+        data = {
+            'rule': 'test_rule',
+            'context': {}
+        }
+        response = self.client.post('/api/v310/kg/inference',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    # =========================================================================
+    # AIOps API Tests (Phase 3)
+    # =========================================================================
+
+    def test_aiops_status(self):
+        """Test AIOps system status endpoint."""
+        response = self.client.get('/api/v310/aiops/status')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIsInstance(result, dict)
+
+    def test_aiops_anomalies(self):
+        """Test AIOps anomalies endpoint."""
+        response = self.client.get('/api/v310/aiops/anomalies')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('anomalies', result)
+
+    def test_aiops_process_metric(self):
+        """Test AIOps metric processing endpoint."""
+        data = {
+            'entity_id': 'test_entity',
+            'metric_name': 'temperature',
+            'value': 25.5
+        }
+        response = self.client.post('/api/v310/aiops/process_metric',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('anomaly_detected', result)
+
+    def test_aiops_diagnose(self):
+        """Test AIOps diagnosis endpoint."""
+        data = {
+            'entity_id': 'test_entity',
+            'metrics': {'temperature': 25.5, 'pressure': 101.3}
+        }
+        response = self.client.post('/api/v310/aiops/diagnose',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_aiops_maintenance_predict(self):
+        """Test AIOps maintenance prediction endpoint."""
+        data = {
+            'entity_id': 'test_entity'
+        }
+        response = self.client.post('/api/v310/aiops/maintenance/predict',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_aiops_remediate(self):
+        """Test AIOps remediation endpoint."""
+        data = {
+            'anomaly_id': 'test_anomaly_001'
+        }
+        response = self.client.post('/api/v310/aiops/remediate',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('actions', result)
+
+    def test_aiops_resolve(self):
+        """Test AIOps resolve anomaly endpoint."""
+        data = {
+            'anomaly_id': 'test_anomaly_001'
+        }
+        response = self.client.post('/api/v310/aiops/resolve',
+                                     data=json.dumps(data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+        result = json.loads(response.data)
+        self.assertIn('status', result)
+
+    def test_aiops_health(self):
+        """Test AIOps entity health endpoint."""
+        response = self.client.get('/api/v310/aiops/health/test_entity')
+        self.assertEqual(response.status_code, 200)
+
+
+class TestV310Phase123Integration(unittest.TestCase):
+    """Integration tests for V3.10 Phase 1-3 API endpoints."""
+
+    @classmethod
+    def setUpClass(cls):
+        """Set up Flask test client."""
+        from server import app
+        app.config['TESTING'] = True
+        cls.client = app.test_client()
+
+    def test_alarm_to_aiops_flow(self):
+        """Test alarm triggering and AIOps detection flow."""
+        # Trigger an alarm
+        alarm_data = {
+            'source': 'integration_test',
+            'message': 'High temperature detected',
+            'severity': 'HIGH',
+            'category': 'EQUIPMENT'
+        }
+        response = self.client.post('/api/v310/alarm/trigger',
+                                     data=json.dumps(alarm_data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+        # Check AIOps status
+        response = self.client.get('/api/v310/aiops/status')
+        self.assertEqual(response.status_code, 200)
+
+    def test_realtime_to_report_flow(self):
+        """Test real-time data to report generation flow."""
+        # Get real-time status
+        response = self.client.get('/api/v310/realtime/status')
+        self.assertEqual(response.status_code, 200)
+
+        # Generate a report
+        report_data = {
+            'type': 'DAILY',
+            'parameters': {'include_realtime': True}
+        }
+        response = self.client.post('/api/v310/report/generate',
+                                     data=json.dumps(report_data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+    def test_kg_entity_to_aiops_health(self):
+        """Test knowledge graph entity to AIOps health flow."""
+        # Create an entity in KG
+        entity_data = {
+            'type': 'SENSOR',
+            'name': 'Temperature Sensor 1',
+            'properties': {'location': 'Section B'}
+        }
+        response = self.client.post('/api/v310/kg/entity',
+                                     data=json.dumps(entity_data),
+                                     content_type='application/json')
+        self.assertEqual(response.status_code, 200)
+
+        # Check AIOps health for the entity type
+        response = self.client.get('/api/v310/aiops/health/sensor_001')
+        self.assertEqual(response.status_code, 200)
+
+
 def run_api_tests():
     """Run all API tests."""
     loader = unittest.TestLoader()
@@ -582,6 +992,8 @@ def run_api_tests():
 
     suite.addTests(loader.loadTestsFromTestCase(TestV310APIEndpoints))
     suite.addTests(loader.loadTestsFromTestCase(TestV310APIIntegration))
+    suite.addTests(loader.loadTestsFromTestCase(TestV310Phase123APIEndpoints))
+    suite.addTests(loader.loadTestsFromTestCase(TestV310Phase123Integration))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)
